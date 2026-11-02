@@ -1,0 +1,6 @@
+{
+  "name": "نظام إدارة وإهلاك الأصول الثابتة | Fixed Assets Manager",
+  "description": "برنامج مكتبي شامل لإدارة وحساب إهلاك الأصول الثابتة بجميع الطرق المحاسبية مع تصدير واستيراد إكسل وPDF ونسخ احتياطية محلية بدون إنترنت.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

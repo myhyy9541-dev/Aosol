@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+@layer base {
+  /* Scrollbar styles */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0f172a;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+}
+
+/* ========================================================
+   Professional A4 Print and PDF Styling (Right to Left)
+   ======================================================== */
+@media print {
+  /* Default A4 Landscape with optimal margins */
+  @page {
+    size: A4 landscape;
+    margin: 8mm 6mm;
+  }
+
+  /* Support for A4 portrait when switched */
+  .page-portrait {
+    page: portrait;
+  }
+  @page portrait {
+    size: A4 portrait;
+    margin: 8mm 6mm;
+  }
+
+  html, body {
+    direction: rtl !important;
+    text-align: right !important;
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 10.5px !important;
+    line-height: 1.35 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  /* Hide interactive UI elements */
+  .no-print, header, nav, button, input, select, .no-print-area {
+    display: none !important;
+  }
+
+  /* Display print-only elements */
+  .print-only {
+    display: block !important;
+  }
+
+  /* Printable container styling */
+  .printable-document {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Tables in Print */
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 9.5px !important;
+    page-break-inside: auto !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  th, td {
+    border: 1px solid #cbd5e1 !important;
+    padding: 4px 6px !important;
+  }
+
+  /* Keep full color for badges and highlights */
+  .print-color-header {
+    background-color: #0f2942 !important;
+    color: #ffffff !important;
+  }
+
+  .print-color-zebra {
+    background-color: #f8fafc !important;
+  }
+
+  .print-color-amber {
+    background-color: #fef3c7 !important;
+    color: #92400e !important;
+  }
+
+  .print-color-emerald {
+    background-color: #d1fae5 !important;
+    color: #065f46 !important;
+  }
+
+  .print-color-sky {
+    background-color: #e0f2fe !important;
+    color: #0369a1 !important;
+  }
+
+  .print-color-footer {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    font-weight: 800 !important;
+    border-top: 2px solid #0f172a !important;
+    border-bottom: 3px double #0f172a !important;
+  }
+}
