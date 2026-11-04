@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+*.db-shm
+*.db-wal
+*.spec
+.venv/
+venv/

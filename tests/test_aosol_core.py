@@ -1,0 +1,87 @@
+import csv
+import tempfile
+import unittest
+from datetime import date
+from pathlib import Path
+
+from aosol_core import AssetStore, depreciation_schedule, effective_start, export_csv, export_xlsx, valuation
+
+
+def sample(method="straight_line"):
+    return {
+        "id": "test-asset", "code": "AST-TEST", "name": "أصل للاختبار", "category": "المباني والإنشاءات",
+        "purchaseDate": "2024-01-01", "inServiceDate": "2024-01-01", "purchaseCost": 12000,
+        "additionalCosts": 0, "salvageValue": 2000, "usefulLifeYears": 5,
+        "depreciationMethod": method, "startDepreciationRule": "mid_month_15", "status": "active",
+    }
+
+
+class DepreciationTests(unittest.TestCase):
+    def test_straight_line_total_matches_depreciable_base(self):
+        asset = sample()
+        schedule = depreciation_schedule(asset)
+        self.assertEqual(len(schedule), 5)
+        self.assertAlmostEqual(sum(row["expense"] for row in schedule), 10000, places=2)
+        self.assertAlmostEqual(schedule[-1]["ending"], 2000, places=2)
+
+    def test_half_month_rule_rolls_late_service_date_forward(self):
+        asset = sample()
+        asset["inServiceDate"] = "2024-01-16"
+        self.assertEqual(effective_start(asset), date(2024, 2, 1))
+        asset["inServiceDate"] = "2024-01-15"
+        self.assertEqual(effective_start(asset), date(2024, 1, 1))
+
+    def test_accelerated_methods_never_fall_below_salvage(self):
+        for method in ("double_declining", "declining_150"):
+            asset = sample(method)
+            values = [float(row["ending"]) for row in depreciation_schedule(asset)]
+            self.assertTrue(all(value >= 2000 - 0.01 for value in values))
+            self.assertAlmostEqual(values[-1], 2000, places=2)
+
+    def test_disposed_valuation_uses_saved_disposal_values(self):
+        asset = sample()
+        asset["status"] = "disposed"
+        asset["disposal"] = {"bookValueAtDisposal": 3500, "accumulatedAtDisposal": 8500}
+        result = valuation(asset, date(2026, 1, 1))
+        self.assertEqual(result["netBookValue"], 3500)
+        self.assertEqual(result["accumulatedDepreciation"], 8500)
+
+
+class StoreTests(unittest.TestCase):
+    def test_database_round_trip_and_backup_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "aosol.db"
+            store = AssetStore(path)
+            store.save(sample())
+            self.assertEqual(store.all()[0]["code"], "AST-TEST")
+            backup = store.backup_data()
+            store.close()
+            restored = AssetStore(Path(directory) / "restored.db")
+            self.assertEqual(restored.restore(backup, replace=True), 1)
+            self.assertEqual(restored.all()[0]["name"], "أصل للاختبار")
+            restored.close()
+
+    def test_csv_export_contains_unicode_headers_and_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "assets.csv"
+            export_csv(path, [sample()])
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows[0]["code"], "AST-TEST")
+            self.assertEqual(rows[0]["name"], "أصل للاختبار")
+
+    def test_excel_export_contains_asset_and_rtl_sheet(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "assets.xlsx"
+            export_xlsx(path, [sample()], "ريال يمني")
+            sheet = load_workbook(path, data_only=True).active
+            self.assertTrue(sheet.sheet_view.rightToLeft)
+            self.assertEqual(sheet.cell(2, 1).value, "AST-TEST")
+            self.assertEqual(sheet.cell(2, 2).value, "أصل للاختبار")
+            self.assertGreaterEqual(sheet.cell(2, 8).value, 2000)
+            self.assertLessEqual(sheet.cell(2, 8).value, 10000)
+
+
+if __name__ == "__main__":
+    unittest.main()
