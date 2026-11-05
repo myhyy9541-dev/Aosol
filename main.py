@@ -8,6 +8,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
+from aosol_config import (
+    configured_backup_directory, copy_database_to_directory, load_app_preferences,
+    prepare_writable_directory, save_app_preferences, write_backup_snapshot,
+)
 from aosol_core import (
     APP_NAME, CATEGORIES, METHODS, STATUSES, AssetStore, demo_assets,
     depreciation_schedule, export_csv, money, valuation,
@@ -57,6 +61,7 @@ class AosolApp(tk.Tk):
         self._build_layout()
         self.refresh()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(2500, self._auto_backup_tick)
 
     def _setup_style(self) -> None:
         style = ttk.Style(self)
@@ -215,7 +220,7 @@ class AosolApp(tk.Tk):
         selected_method = self.method_filter_var.get()
         selected_department = self.department_filter_var.get()
         for index, asset in enumerate(self.assets):
-            search_values = (asset.get("name"), asset.get("code"), asset.get("location"), asset.get("department"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"))
+            search_values = (asset.get("name"), asset.get("code"), asset.get("accountCode"), asset.get("location"), asset.get("department"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"))
             if query and not any(query in str(value or "").casefold() for value in search_values):
                 continue
             val = valuation(asset)
@@ -442,18 +447,45 @@ class AosolApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("تعذر إنشاء القالب", str(exc), parent=self)
 
+    def _auto_backup_tick(self) -> None:
+        try:
+            preferences = load_app_preferences()
+            if preferences.get("auto_backup_enabled"):
+                interval_days = max(1, int(preferences.get("auto_backup_interval_days", 7)))
+                last_raw = str(preferences.get("last_auto_backup_at") or "")
+                try:
+                    last = datetime.fromisoformat(last_raw)
+                    due = (datetime.now() - last).total_seconds() >= interval_days * 86400
+                except ValueError:
+                    due = True
+                if due:
+                    directory = preferences.get("backup_directory") or str(configured_backup_directory())
+                    backup_path = write_backup_snapshot(self.store.backup_data(), directory, automatic=True)
+                    preferences["last_auto_backup_at"] = datetime.now().isoformat(timespec="seconds")
+                    preferences["last_auto_backup_path"] = str(backup_path)
+                    save_app_preferences(preferences)
+                    self.footer_label.config(text=f"تم إنشاء النسخة الدورية: {backup_path}")
+        except Exception as exc:
+            if hasattr(self, "footer_label"):
+                self.footer_label.config(text=f"تعذر إنشاء النسخة الدورية: {exc}")
+        try:
+            self.after(60_000, self._auto_backup_tick)
+        except tk.TclError:
+            pass
+
     def backup(self) -> None:
+        backup_directory = str(prepare_writable_directory(configured_backup_directory()))
         choice = messagebox.askyesnocancel("النسخ الاحتياطي", "هل تريد إنشاء نسخة احتياطية؟\n\nنعم: حفظ نسخة JSON\nلا: استعادة نسخة من ملف JSON", parent=self)
         if choice is None:
             return
         if choice:
-            path = filedialog.asksaveasfilename(parent=self, title="حفظ نسخة احتياطية", defaultextension=".json", initialfile=f"Aosol_backup_{date.today().isoformat()}.json", filetypes=[("نسخة Aosol", "*.json")])
+            path = filedialog.asksaveasfilename(parent=self, title="حفظ نسخة احتياطية", initialdir=backup_directory, defaultextension=".json", initialfile=f"Aosol_backup_{date.today().isoformat()}.json", filetypes=[("نسخة Aosol", "*.json")])
             if not path:
                 return
             Path(path).write_text(json.dumps(self.store.backup_data(), ensure_ascii=False, indent=2), encoding="utf-8")
             messagebox.showinfo("تم النسخ", f"حُفظت النسخة الاحتياطية في:\n{path}", parent=self)
         else:
-            path = filedialog.askopenfilename(parent=self, title="استعادة النسخة الاحتياطية", filetypes=[("نسخة Aosol", "*.json")])
+            path = filedialog.askopenfilename(parent=self, title="استعادة النسخة الاحتياطية", initialdir=backup_directory, filetypes=[("نسخة Aosol", "*.json")])
             if not path:
                 return
             try:
@@ -502,22 +534,27 @@ class AosolApp(tk.Tk):
 
     def settings(self) -> None:
         dialog = tk.Toplevel(self)
-        dialog.title("إعدادات المنشأة")
+        dialog.title("إعدادات المنشأة والتخزين")
         screen_width, screen_height = dialog.winfo_screenwidth(), dialog.winfo_screenheight()
-        width, height = min(620, max(500, screen_width - 40)), min(540, max(440, screen_height - 80))
+        width, height = min(760, max(560, screen_width - 40)), min(760, max(500, screen_height - 80))
         dialog.geometry(f"{width}x{height}")
-        dialog.minsize(min(width, 500), min(height, 440))
+        dialog.minsize(min(width, 540), min(height, 480))
         dialog.configure(bg=WHITE)
         dialog.transient(self)
         dialog.grab_set()
         form_scroll = ScrollableFrame(dialog, background=WHITE)
         form_scroll.pack(fill="both", expand=True, padx=14, pady=(12, 4))
         form = form_scroll.content
-        tk.Label(form, text="إعدادات المنشأة والتقارير", bg=WHITE, fg=NAVY, font=("Tahoma", 15, "bold")).pack(anchor="e", padx=20, pady=(12, 16))
+        tk.Label(form, text="إعدادات المنشأة والتخزين والنسخ", bg=WHITE, fg=NAVY, font=("Tahoma", 15, "bold")).pack(anchor="e", padx=20, pady=(12, 16))
         company_var = tk.StringVar(value=self.company)
         reg_var = tk.StringVar(value=self.commercial_reg)
         tax_var = tk.StringVar(value=self.tax_number)
         currency_var = tk.StringVar(value=self.currency)
+        preferences = load_app_preferences()
+        data_directory_var = tk.StringVar(value=str(self.store.path.parent))
+        backup_directory_var = tk.StringVar(value=str(preferences.get("backup_directory") or configured_backup_directory()))
+        auto_backup_var = tk.BooleanVar(value=bool(preferences.get("auto_backup_enabled", False)))
+        backup_days_var = tk.StringVar(value=str(preferences.get("auto_backup_interval_days", 7)))
         fields = [("اسم المنشأة", company_var), ("السجل التجاري", reg_var), ("الرقم الضريبي", tax_var)]
         for label, var in fields:
             row = tk.Frame(form, bg=WHITE)
@@ -529,17 +566,81 @@ class AosolApp(tk.Tk):
         tk.Label(currency_row, text="العملة", bg=WHITE, fg=INK, font=("Tahoma", 10), width=17, anchor="e").pack(side="right")
         currencies = ["ريال يمني", "ريال سعودي", "دولار أمريكي", "درهم إماراتي", "جنيه مصري", "دينار كويتي", "ريال قطري", "ريال عماني"]
         ttk.Combobox(currency_row, textvariable=currency_var, values=currencies, justify="right", font=("Tahoma", 10)).pack(side="left", fill="x", expand=True, ipady=5)
+
+        tk.Label(form, text="موقع البيانات والنسخ الاحتياطية", bg=WHITE, fg=NAVY, font=("Tahoma", 11, "bold")).pack(anchor="e", padx=20, pady=(16, 6))
+
+        def directory_row(label: str, variable: tk.StringVar) -> None:
+            row = tk.Frame(form, bg=WHITE)
+            row.pack(fill="x", padx=20, pady=6)
+            tk.Label(row, text=label, bg=WHITE, fg=INK, font=("Tahoma", 9), width=20, anchor="e").pack(side="right", padx=(0, 8))
+            entry = tk.Entry(row, textvariable=variable, justify="left", font=("Tahoma", 9), relief="solid", bd=1)
+            entry.pack(side="right", fill="x", expand=True, ipady=5)
+            def browse() -> None:
+                chosen = filedialog.askdirectory(parent=dialog, title=f"اختر {label}", initialdir=variable.get() or str(Path.home()), mustexist=True)
+                if chosen:
+                    variable.set(chosen)
+            tk.Button(row, text="استعراض…", command=browse, bg="#edf3f8", fg=NAVY, relief="flat", font=("Tahoma", 9, "bold"), padx=10, pady=5).pack(side="left", padx=(8, 0))
+
+        directory_row("مجلد قاعدة البيانات", data_directory_var)
+        tk.Label(form, text="عند تغيير المجلد تُنسخ قاعدة البيانات الحالية إلى الوجهة الجديدة، وتبقى النسخة الأصلية دون حذف.", bg=WHITE, fg=MUTED, font=("Tahoma", 8), anchor="e", justify="right", wraplength=650).pack(fill="x", padx=28, pady=(0, 4))
+        directory_row("مجلد النسخ الاحتياطية", backup_directory_var)
+
+        backup_panel = tk.LabelFrame(form, text="النسخ الاحتياطي الدوري", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=8)
+        backup_panel.pack(fill="x", padx=20, pady=(12, 10))
+        tk.Checkbutton(backup_panel, text="تفعيل النسخ الاحتياطي التلقائي", variable=auto_backup_var, bg=WHITE, fg=INK, activebackground=WHITE, font=("Tahoma", 9, "bold"), anchor="e").pack(side="right", padx=8)
+        tk.Label(backup_panel, text="كل", bg=WHITE, fg=INK, font=("Tahoma", 9)).pack(side="right", padx=(8, 3))
+        tk.Spinbox(backup_panel, from_=1, to=3650, textvariable=backup_days_var, width=7, justify="center", font=("Tahoma", 10)).pack(side="right", padx=3, ipady=3)
+        tk.Label(backup_panel, text="يوم", bg=WHITE, fg=INK, font=("Tahoma", 9)).pack(side="right", padx=3)
+        tk.Label(form, text="يُنشئ التطبيق نسخة JSON عند استحقاق المدة: عند فتح البرنامج ثم كل دقيقة أثناء تشغيله. يحتفظ بآخر 30 نسخة تلقائية.", bg=WHITE, fg=MUTED, font=("Tahoma", 8), anchor="e", justify="right", wraplength=650).pack(fill="x", padx=24, pady=(0, 8))
+
         def save() -> None:
-            self.company = company_var.get().strip() or self.company
-            self.commercial_reg = reg_var.get().strip()
-            self.tax_number = tax_var.get().strip()
-            self.currency = currency_var.get().strip() or self.currency
-            self.store.set_setting("company_name", self.company)
-            self.store.set_setting("commercial_reg", self.commercial_reg)
-            self.store.set_setting("tax_number", self.tax_number)
-            self.store.set_setting("currency", self.currency)
-            dialog.destroy()
-            self.refresh()
+            new_store: AssetStore | None = None
+            try:
+                data_dir = Path(data_directory_var.get().strip()).expanduser().resolve()
+                backup_dir = prepare_writable_directory(backup_directory_var.get().strip())
+                interval_days = int(backup_days_var.get().strip())
+                if not 1 <= interval_days <= 3650:
+                    raise ValueError("فاصل النسخ يجب أن يكون بين يوم واحد و3650 يومًا.")
+                current_dir = self.store.path.parent.resolve()
+                if data_dir != current_dir:
+                    new_db = copy_database_to_directory(self.store.conn, data_dir)
+                    new_store = AssetStore(new_db)
+                    if len(new_store.all()) != len(self.store.all()):
+                        raise RuntimeError("لم تتطابق سجلات قاعدة البيانات بعد النسخ؛ بقيت القاعدة الأصلية كما هي.")
+                target_store = new_store or self.store
+                new_company = company_var.get().strip() or self.company
+                new_reg = reg_var.get().strip()
+                new_tax = tax_var.get().strip()
+                new_currency = currency_var.get().strip() or self.currency
+                target_store.set_setting("company_name", new_company)
+                target_store.set_setting("commercial_reg", new_reg)
+                target_store.set_setting("tax_number", new_tax)
+                target_store.set_setting("currency", new_currency)
+                updated_preferences = dict(preferences)
+                old_backup_dir = str(preferences.get("backup_directory") or configured_backup_directory())
+                updated_preferences.update({
+                    "data_directory": str(data_dir), "backup_directory": str(backup_dir),
+                    "auto_backup_enabled": bool(auto_backup_var.get()),
+                    "auto_backup_interval_days": interval_days,
+                })
+                if auto_backup_var.get() and not preferences.get("auto_backup_enabled"):
+                    updated_preferences["last_auto_backup_at"] = ""
+                if Path(old_backup_dir).expanduser().resolve() != backup_dir:
+                    updated_preferences["last_auto_backup_at"] = ""
+                save_app_preferences(updated_preferences)
+                if new_store:
+                    old_store = self.store
+                    self.store = new_store
+                    new_store = None
+                    old_store.close()
+                self.company, self.commercial_reg, self.tax_number, self.currency = new_company, new_reg, new_tax, new_currency
+                dialog.destroy()
+                self.refresh()
+                messagebox.showinfo("تم حفظ الإعدادات", "حُفظت إعدادات التخزين والنسخ الاحتياطية بنجاح.", parent=self)
+            except Exception as exc:
+                if new_store:
+                    new_store.close()
+                messagebox.showerror("تعذر حفظ الإعدادات", str(exc), parent=dialog)
         self._button(dialog, "حفظ الإعدادات", save, kind="primary").pack(side="left", padx=24, pady=18)
 
     def load_demo(self) -> None:
@@ -579,10 +680,10 @@ class AssetDialog(tk.Toplevel):
         form_scroll.pack(fill="both", expand=True, padx=6, pady=6)
         form = form_scroll.content
         form.configure(padx=18, pady=14)
-        defaults: dict[str, Any] = asset or {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "name": "", "category": CATEGORIES[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
+        defaults: dict[str, Any] = asset or {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "accountCode": "", "name": "", "category": CATEGORIES[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
         self.vars: dict[str, tk.Variable] = {}
         fields = [
-            ("code", "رمز الأصل *", "entry"), ("name", "اسم الأصل *", "entry"), ("category", "التصنيف", "category"), ("purchaseDate", "تاريخ الشراء", "entry"),
+            ("code", "رمز الأصل *", "entry"), ("accountCode", "رمز الحساب المحاسبي", "entry"), ("name", "اسم الأصل *", "entry"), ("category", "التصنيف", "category"), ("purchaseDate", "تاريخ الشراء", "entry"),
             ("inServiceDate", "تاريخ بدء التشغيل", "entry"), ("purchaseCost", f"تكلفة الشراء ({currency}) *", "entry"), ("additionalCosts", "تكاليف إضافية", "entry"), ("salvageValue", "القيمة التخريدية", "entry"),
             ("usefulLifeYears", "العمر الإنتاجي (سنة)", "entry"), ("depreciationMethod", "طريقة الإهلاك", "method"), ("startDepreciationRule", "بداية الإهلاك", "rule"), ("status", "حالة الأصل", "status"),
             ("department", "الإدارة / القسم", "entry"), ("location", "الموقع", "entry"), ("custodian", "المسؤول / العهدة", "entry"), ("supplier", "المورد", "entry"),
@@ -641,7 +742,7 @@ class AssetDialog(tk.Toplevel):
             rule_map = {"منتصف الشهر (١–١٥)": "mid_month_15", "الشهر التالي": "next_month", "الشهر نفسه": "same_month"}
             result = dict(self.original or {})
             result.update({
-                "id": (self.original or {}).get("id", __import__("uuid").uuid4().hex), "code": v["code"], "name": v["name"], "category": v["category"],
+                "id": (self.original or {}).get("id", __import__("uuid").uuid4().hex), "code": v["code"], "accountCode": v["accountCode"], "name": v["name"], "category": v["category"],
                 "purchaseDate": v["purchaseDate"], "inServiceDate": v["inServiceDate"], "purchaseCost": purchase_cost,
                 "additionalCosts": money(v["additionalCosts"].replace(",", "")), "salvageValue": money(v["salvageValue"].replace(",", "")),
                 "usefulLifeYears": int(money(v["usefulLifeYears"])), "depreciationMethod": method_key,

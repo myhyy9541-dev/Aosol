@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aosol_core import CATEGORIES, METHODS, STATUSES, money, safe_spreadsheet_text, valuation
-from aosol_reports import report_view
+from aosol_reports import build_asset_report, period_ranges, report_view
 
 NAVY = "13233A"
 NAVY_2 = "1F3656"
@@ -28,6 +28,7 @@ BORDER = "D8E1EA"
 # Stable Arabic import schema. The technical field keys are stored in comments.
 TEMPLATE_COLUMNS = [
     ("code", "رمز الأصل *", "text"),
+    ("accountCode", "رمز الحساب", "text"),
     ("name", "اسم الأصل *", "text"),
     ("category", "فئة الأصل *", "category"),
     ("purchaseDate", "تاريخ الشراء YYYY-MM-DD *", "date"),
@@ -585,7 +586,7 @@ def export_assets_workbook(path: str | Path, assets: list[dict[str, Any]], compa
     overview["B9"].alignment = Alignment(horizontal="right")
     overview["B11"] = "روابط الأوراق"
     overview["B11"].font = Font(name="Arial", size=12, bold=True, color=NAVY)
-    for row, sheet_name in enumerate(["سجل الأصول", "ملخص الفئات", "ملخص الإدارات", "جدول الإهلاك"], 12):
+    for row, sheet_name in enumerate(["سجل الأصول", "ملخص الحسابات", "ملخص الفئات", "ملخص الإدارات", "جدول الإهلاك"], 12):
         cell = overview.cell(row, 2, sheet_name)
         cell.hyperlink = f"#'{sheet_name}'!A1"
         cell.font = Font(name="Arial", size=10, color=TEAL, underline="single")
@@ -633,22 +634,22 @@ def export_assets_workbook(path: str | Path, assets: list[dict[str, Any]], compa
     sheet = workbook.create_sheet("سجل الأصول")
     sheet.sheet_properties.tabColor = NAVY_2
     _style_title(sheet, "سجل الأصول الثابتة", f"{company}  |  العملة: {currency}  |  تقرير حتى {now.isoformat()}", 22)
-    headers = ["رمز الأصل", "اسم الأصل", "الفئة", "تاريخ الشراء", "تاريخ بدء الخدمة", "تكلفة الشراء", "تكاليف إضافية", "التكلفة الرأسمالية", "القيمة التخريدية", "العمر الإنتاجي", "طريقة الإهلاك", "قاعدة البدء", "الحالة", "الإدارة", "الموقع", "العهدة", "الرقم التسلسلي", "المورد", "رقم الفاتورة", "مجمع الإهلاك", "صافي القيمة الدفترية", "ملاحظات"]
+    headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "تاريخ الشراء", "تاريخ بدء الخدمة", "تكلفة الشراء", "تكاليف إضافية", "التكلفة الرأسمالية", "القيمة التخريدية", "العمر الإنتاجي", "طريقة الإهلاك", "قاعدة البدء", "الحالة", "الإدارة", "الموقع", "العهدة", "الرقم التسلسلي", "المورد", "رقم الفاتورة", "مجمع الإهلاك", "صافي القيمة الدفترية", "ملاحظات"]
     rows = []
     for asset in sorted(assets, key=lambda item: (str(item.get("category", "")), str(item.get("name", "")))):
         val = valuation(asset)
-        rows.append([asset.get("code"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), money(asset.get("purchaseCost")), money(asset.get("additionalCosts")), val["totalCost"], money(asset.get("salvageValue")), asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), asset.get("depreciationMethod")), RULE_LABELS.get(asset.get("startDepreciationRule"), "منتصف الشهر (١–١٥)"), STATUSES.get(asset.get("status"), "نشط"), asset.get("department"), asset.get("location"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"), asset.get("invoiceNumber"), val["accumulatedDepreciation"], val["netBookValue"], asset.get("notes")])
-    _write_data_table(sheet, headers, rows, header_row=5, currency_columns={6, 7, 8, 9, 20, 21})
+        rows.append([asset.get("code"), asset.get("accountCode"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), money(asset.get("purchaseCost")), money(asset.get("additionalCosts")), val["totalCost"], money(asset.get("salvageValue")), asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), asset.get("depreciationMethod")), RULE_LABELS.get(asset.get("startDepreciationRule"), "منتصف الشهر (١–١٥)"), STATUSES.get(asset.get("status"), "نشط"), asset.get("department"), asset.get("location"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"), asset.get("invoiceNumber"), val["accumulatedDepreciation"], val["netBookValue"], asset.get("notes")])
+    _write_data_table(sheet, headers, rows, header_row=5, currency_columns={7, 8, 9, 10, 21, 22})
     sheet.freeze_panes = "A6"
     if rows:
         sheet.conditional_formatting.add(f"U6:U{5 + len(rows)}", DataBarRule(start_type="min", end_type="max", color=TEAL))
 
     # Group summaries
-    for title, groups, tab_color in (("ملخص الفئات", report["categories"], GOLD), ("ملخص الإدارات", report["departments"], TEAL)):
+    for title, groups, tab_color in (("ملخص الحسابات", report["accounts"], "4C78A8"), ("ملخص الفئات", report["categories"], GOLD), ("ملخص الإدارات", report["departments"], TEAL)):
         grouped = workbook.create_sheet(title)
         grouped.sheet_properties.tabColor = tab_color
         _style_title(grouped, title, f"{company}  |  من 01-01-{now.year} إلى {now.isoformat()}  |  العملة: {currency}", 9)
-        headers = ["الفئة / الإدارة", "عدد الأصول", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "إهلاك الفترة", "قيمة الاستبعادات", "الربح / (الخسارة)", "صافي القيمة آخر المدة"]
+        headers = ["رمز الحساب / الفئة / الإدارة", "عدد الأصول", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "إهلاك الفترة", "قيمة الاستبعادات", "الربح / (الخسارة)", "صافي القيمة آخر المدة"]
         rows = [[g["group"], g["assetCount"], g["totalCost"], g["openingBookValue"], g["additions"], g["periodExpense"], g["disposalBookValue"], g["gainLoss"], g["endingBookValue"]] for g in groups]
         totals_row = ["الإجمالي", sum(g["assetCount"] for g in groups)] + [sum(float(g[key]) for g in groups) for key in ("totalCost", "openingBookValue", "additions", "periodExpense", "disposalBookValue", "gainLoss", "endingBookValue")]
         _write_data_table(grouped, headers, rows, header_row=5, currency_columns=set(range(3, 10)), total_row=totals_row)
@@ -703,7 +704,7 @@ def export_report_workbook(path: str | Path, report: dict[str, Any], company: st
         summary.cell(i, 3, report["totals"][key]).font = Font(name="Arial", color=INK)
         summary.cell(i, 3).number_format = '#,##0.00;[Red](#,##0.00);-'
         summary.cell(i, 3).alignment = Alignment(horizontal="right")
-    for i, sheet_name in enumerate(["التفاصيل", "حسب الفئة", "حسب الإدارة", "الاستبعادات"], 10):
+    for i, sheet_name in enumerate(["التفاصيل", "حسب الحساب", "حسب الفئة", "حسب الإدارة", "الاستبعادات"], 10):
         cell = summary.cell(i, 5, sheet_name)
         cell.hyperlink = f"#'{sheet_name}'!A1"
         cell.font = Font(name="Arial", color=TEAL, underline="single")
@@ -736,6 +737,7 @@ def export_report_workbook(path: str | Path, report: dict[str, Any], company: st
 
     views = [
         ("التفاصيل", "حركة الأصول للفترة", report["details"], "details"),
+        ("حسب الحساب", "حسب الحساب", report["accounts"], "accounts"),
         ("حسب الفئة", "حسب التصنيف", report["categories"], "categories"),
         ("حسب الإدارة", "حسب الإدارة", report["departments"], "departments"),
         ("الاستبعادات", "الاستبعادات", report["disposals"], "disposals"),
@@ -767,3 +769,191 @@ def export_report_csv(path: str | Path, report: dict[str, Any], kind: str) -> No
         writer = csv.writer(stream)
         writer.writerow(headers)
         writer.writerows([[safe_spreadsheet_text(value) for value in row] for row in rows])
+
+
+CUSTOM_DETAIL_FIELDS: list[tuple[str, str]] = [
+    ("code", "رمز الأصل"), ("accountCode", "رمز الحساب"), ("name", "اسم الأصل"),
+    ("category", "التصنيف"), ("department", "الإدارة"), ("purchaseDate", "تاريخ الشراء"),
+    ("inServiceDate", "تاريخ بدء الخدمة"), ("totalCost", "التكلفة الإجمالية"),
+    ("openingBookValue", "رصيد أول المدة"), ("additions", "الإضافات"),
+    ("periodExpense", "إهلاك الفترة"), ("accumulatedDepreciation", "مجمع الإهلاك"),
+    ("disposalBookValue", "القيمة الدفترية المستبعدة"), ("proceeds", "متحصلات الاستبعاد"),
+    ("disposalCosts", "تكاليف الاستبعاد"), ("gainLoss", "الربح / (الخسارة)"),
+    ("endingBookValue", "صافي القيمة آخر المدة"), ("salvageValue", "القيمة التخريدية"),
+    ("usefulLifeYears", "العمر الإنتاجي (سنة)"), ("methodLabel", "طريقة الإهلاك"),
+    ("statusLabel", "الحالة"), ("location", "الموقع"), ("custodian", "العهدة / المسؤول"),
+    ("serialNumber", "الرقم التسلسلي"), ("supplier", "المورد"), ("invoiceNumber", "رقم الفاتورة"),
+    ("expenseNote", "ملاحظة الإهلاك"),
+]
+CUSTOM_MONEY_FIELDS = {
+    "totalCost", "openingBookValue", "additions", "periodExpense", "accumulatedDepreciation",
+    "disposalBookValue", "proceeds", "disposalCosts", "gainLoss", "endingBookValue", "salvageValue",
+}
+GROUP_METRICS = [
+    ("assetCount", "عدد الأصول"), ("totalCost", "التكلفة الإجمالية"),
+    ("openingBookValue", "رصيد أول المدة"), ("additions", "الإضافات"),
+    ("periodExpense", "إهلاك الفترة"), ("accumulatedDepreciation", "مجمع الإهلاك"),
+    ("disposalBookValue", "القيمة الدفترية المستبعدة"), ("proceeds", "متحصلات الاستبعاد"),
+    ("disposalCosts", "تكاليف الاستبعاد"), ("gainLoss", "الربح / (الخسارة)"),
+    ("endingBookValue", "صافي القيمة آخر المدة"),
+]
+
+
+def export_custom_period_workbook(
+    path: str | Path,
+    assets: list[dict[str, Any]],
+    company: str,
+    currency: str,
+    from_date: str | date,
+    to_date: str | date,
+    *,
+    granularity: str = "شهري",
+    selected_codes: set[str] | None = None,
+    columns: list[str] | None = None,
+    include_overall: bool = True,
+    include_periods: bool = True,
+    include_details: bool = True,
+    include_accounts: bool = True,
+    include_categories: bool = True,
+    include_departments: bool = True,
+    include_detail_total: bool = True,
+    orientation: str = "landscape",
+    filters: dict[str, str] | None = None,
+) -> None:
+    """Create a customizable, Arabic RTL A4 workbook for monthly/yearly/custom ranges."""
+    Workbook, _load, _chart, _ref, _scale, _bars, Alignment, _Border, Font, PatternFill, _Side, _DV = _openpyxl()
+    start = from_date if isinstance(from_date, date) else date.fromisoformat(str(from_date)[:10])
+    end = to_date if isinstance(to_date, date) else date.fromisoformat(str(to_date)[:10])
+    ranges = period_ranges(start, end, granularity)
+    filters = filters or {}
+    selected = set(selected_codes or ())
+    scoped_assets = [asset for asset in assets if not selected or str(asset.get("code", "")) in selected]
+    if not scoped_assets:
+        raise ValueError("اختر أصلًا واحدًا على الأقل للتقرير.")
+    chosen_columns = list(columns or [key for key, _label in CUSTOM_DETAIL_FIELDS])
+    field_labels = dict(CUSTOM_DETAIL_FIELDS)
+    chosen_columns = [key for key in chosen_columns if key in field_labels]
+    if include_details and not chosen_columns:
+        raise ValueError("اختر عمودًا واحدًا على الأقل لتفاصيل الأصول.")
+    if not any((include_overall, include_periods, include_details, include_accounts, include_categories, include_departments)):
+        raise ValueError("اختر قسمًا واحدًا على الأقل لإضافته إلى المصنف.")
+    if orientation not in ("landscape", "portrait"):
+        raise ValueError("اتجاه الصفحة غير صالح.")
+
+    def build(period_start: date, period_end: date) -> dict[str, Any]:
+        return build_asset_report(
+            scoped_assets, period_start, period_end,
+            category=filters.get("category", "الكل"),
+            department=filters.get("department", "الكل"),
+            status=filters.get("status", "الكل"),
+            query=filters.get("query", ""),
+        )
+
+    overall = build(start, end)
+    if not overall["details"]:
+        raise ValueError("لا توجد أصول تطابق الفترة والمرشحات والصفوف التي اخترتها.")
+    period_reports = [(label, pstart, pend, build(pstart, pend)) for label, pstart, pend in ranges]
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M")
+    subtitle = f"{company}  |  {start.isoformat()} إلى {end.isoformat()}  |  العملة: {currency}  |  أُنشئ: {generated}"
+
+    def configure_sheet(sheet: Any, title: str, column_count: int) -> None:
+        _style_title(sheet, title, subtitle, max(2, column_count))
+        sheet.page_setup.orientation = orientation
+        sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
+        sheet.page_setup.fitToWidth = 1
+        sheet.page_setup.fitToHeight = 0
+        sheet.sheet_properties.pageSetUpPr.fitToPage = True
+        sheet.print_title_rows = "5:5"
+        sheet.sheet_view.rightToLeft = True
+
+    if include_overall:
+        sheet = workbook.create_sheet("الملخص العام")
+        sheet.sheet_properties.tabColor = TEAL
+        configure_sheet(sheet, "ملخص التقرير العام", 2)
+        totals = overall["totals"]
+        summary_fields = [
+            ("عدد الأصول المشمولة", "assetCount", False), ("التكلفة الإجمالية", "totalCost", True),
+            ("رصيد أول المدة", "openingBookValue", True), ("الإضافات الرأسمالية", "additions", True),
+            ("مصروف الإهلاك للفترة", "periodExpense", True), ("مجمع الإهلاك آخر المدة", "accumulatedDepreciation", True),
+            ("القيمة الدفترية المستبعدة", "disposalBookValue", True), ("متحصلات الاستبعاد", "proceeds", True),
+            ("تكاليف الاستبعاد", "disposalCosts", True), ("الربح / (الخسارة)", "gainLoss", True),
+            ("صافي القيمة آخر المدة", "endingBookValue", True),
+        ]
+        rows = [[label, totals[key]] for label, key, _is_money in summary_fields]
+        _write_data_table(sheet, ["المؤشر", "القيمة"], rows, header_row=5, currency_columns={2})
+        sheet.column_dimensions["B"].width = 34
+        sheet.column_dimensions["C"].width = 24
+        sheet["B18"] = f"التقسيم: {granularity}  |  تم تطبيق مرشحات الفئة والإدارة والحالة والبحث المحددة في مركز التقارير."
+        sheet["B18"].font = Font(name="Arial", size=9, color=MUTED, italic=True)
+        sheet["B18"].alignment = Alignment(horizontal="right", wrap_text=True)
+        sheet.merge_cells("B18:C19")
+        if overall.get("notes"):
+            sheet.merge_cells("B21:C22")
+            sheet["B21"] = "تنبيه: " + " | ".join(overall["notes"])
+            sheet["B21"].fill = PatternFill("solid", fgColor=PALE_GOLD)
+            sheet["B21"].alignment = Alignment(horizontal="right", wrap_text=True, vertical="center")
+
+    if include_periods:
+        sheet = workbook.create_sheet("ملخص الفترات")
+        sheet.sheet_properties.tabColor = GOLD
+        headers = ["الفترة", "من تاريخ", "إلى تاريخ", "عدد الأصول", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "إهلاك الفترة", "القيمة المستبعدة", "المتحصلات", "تكاليف الاستبعاد", "الربح / (الخسارة)", "رصيد آخر المدة"]
+        configure_sheet(sheet, f"التقرير {granularity}", len(headers))
+        rows = []
+        for label, period_start, period_end, report in period_reports:
+            t = report["totals"]
+            rows.append([label, period_start.isoformat(), period_end.isoformat(), t["assetCount"], t["totalCost"], t["openingBookValue"], t["additions"], t["periodExpense"], t["disposalBookValue"], t["proceeds"], t["disposalCosts"], t["gainLoss"], t["endingBookValue"]])
+        flows = {"additions": 0.0, "periodExpense": 0.0, "disposalBookValue": 0.0, "proceeds": 0.0, "disposalCosts": 0.0, "gainLoss": 0.0}
+        for _label, _period_start, _period_end, report in period_reports:
+            for key in flows:
+                flows[key] += float(report["totals"][key])
+        total_row = ["مجموع الحركات*", "", "", "", "", "", flows["additions"], flows["periodExpense"], flows["disposalBookValue"], flows["proceeds"], flows["disposalCosts"], flows["gainLoss"], ""] if include_detail_total else None
+        money_cols = set(range(5, 14))
+        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=money_cols, total_row=total_row)
+        note_row = 8 + len(rows)
+        sheet.cell(note_row, 1, "* إجمالي الحركات يجمع التدفقات فقط. التكلفة الإجمالية وأرصدة أول/آخر المدة أرقام رصيدية، وليست قابلة للجمع عبر الشهور/السنوات.")
+        sheet.cell(note_row, 1).font = Font(name="Arial", size=9, italic=True, color=MUTED)
+        sheet.cell(note_row, 1).alignment = Alignment(horizontal="right", wrap_text=True)
+        sheet.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=len(headers))
+
+    if include_details:
+        sheet = workbook.create_sheet("تفاصيل الأصول")
+        sheet.sheet_properties.tabColor = NAVY_2
+        headers = [field_labels[key] for key in chosen_columns]
+        configure_sheet(sheet, "تفاصيل الأصول / الحسابات", len(headers))
+        selected_rows = overall["details"]
+        rows = [[row.get(key, "") for key in chosen_columns] for row in selected_rows]
+        total_row = None
+        if include_detail_total:
+            label_index = next((index for index, key in enumerate(chosen_columns) if key not in CUSTOM_MONEY_FIELDS and key != "usefulLifeYears"), None)
+            total_row = [
+                sum(float(row.get(key, 0) or 0) for row in selected_rows) if key in CUSTOM_MONEY_FIELDS
+                else "الإجمالي العام" if index == label_index
+                else ""
+                for index, key in enumerate(chosen_columns)
+            ]
+        currency_cols = {index for index, key in enumerate(chosen_columns, 1) if key in CUSTOM_MONEY_FIELDS}
+        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=currency_cols, total_row=total_row)
+
+    def add_group_sheet(title: str, group_label: str, groups: list[dict[str, Any]], tab_color: str) -> None:
+        sheet = workbook.create_sheet(title)
+        sheet.sheet_properties.tabColor = tab_color
+        headers = [group_label] + [label for _key, label in GROUP_METRICS]
+        configure_sheet(sheet, title, len(headers))
+        rows = [[group["group"]] + [group.get(key, 0) for key, _label in GROUP_METRICS] for group in groups]
+        totals = overall["totals"]
+        total_row = ["الإجمالي العام"] + [totals.get(key, 0) for key, _label in GROUP_METRICS] if include_detail_total else None
+        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=set(range(3, len(headers) + 1)), total_row=total_row)
+
+    if include_accounts:
+        add_group_sheet("حسب الحساب", "رمز الحساب", overall["accounts"], "4C78A8")
+    if include_categories:
+        add_group_sheet("حسب التصنيف", "التصنيف", overall["categories"], GOLD)
+    if include_departments:
+        add_group_sheet("حسب الإدارة", "الإدارة", overall["departments"], TEAL)
+
+    workbook.properties.title = f"تقرير أصول {granularity} - Aosol"
+    workbook.properties.subject = f"{start.isoformat()} — {end.isoformat()}"
+    workbook.properties.creator = "Aosol"
+    workbook.save(path)

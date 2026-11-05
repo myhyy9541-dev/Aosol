@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, timedelta
+from calendar import monthrange
 from typing import Any
 
 from aosol_core import METHODS, STATUSES, money, valuation
@@ -29,6 +30,27 @@ def _status_at(asset: dict[str, Any], as_of: date, value: dict[str, float]) -> s
     if value["netBookValue"] <= salvage + 0.01:
         return "fully_depreciated"
     return "active"
+
+
+def period_ranges(from_date: str | date, to_date: str | date, granularity: str) -> list[tuple[str, date, date]]:
+    """Split an inclusive report interval into full-range, monthly, or yearly periods."""
+    start = _date(from_date, date.today())
+    end = _date(to_date, date.today())
+    if start > end:
+        raise ValueError("تاريخ بداية التقرير يجب ألا يتجاوز تاريخ النهاية.")
+    if granularity == "شهري":
+        result: list[tuple[str, date, date]] = []
+        cursor = date(start.year, start.month, 1)
+        while cursor <= end:
+            month_end = date(cursor.year, cursor.month, monthrange(cursor.year, cursor.month)[1])
+            result.append((cursor.strftime("%Y-%m"), max(start, cursor), min(end, month_end)))
+            cursor = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
+        return result
+    if granularity == "سنوي":
+        return [(str(year), max(start, date(year, 1, 1)), min(end, date(year, 12, 31))) for year in range(start.year, end.year + 1)]
+    if granularity == "الفترة كاملة":
+        return [(f"{start.isoformat()} — {end.isoformat()}", start, end)]
+    raise ValueError("نوع تقسيم التقرير غير معروف")
 
 
 def build_asset_report(
@@ -95,7 +117,7 @@ def build_asset_report(
         ending_book = 0.0 if asset.get("status") == "disposed" and disposal_date <= end else closing_valuation["netBookValue"]
         row = {
             "id": asset.get("id", ""), "code": asset.get("code", ""), "name": asset.get("name", ""),
-            "category": asset.get("category", "غير مصنف"), "department": asset.get("department", "غير محدد"),
+            "accountCode": asset.get("accountCode", ""), "category": asset.get("category", "غير مصنف"), "department": asset.get("department", "غير محدد"),
             "purchaseDate": purchase_date.isoformat(), "inServiceDate": asset.get("inServiceDate", ""),
             "totalCost": total_cost, "openingBookValue": opening_book, "additions": additions,
             "periodExpense": period_expense, "disposalBookValue": disposal_book,
@@ -124,9 +146,10 @@ def build_asset_report(
     totals["unitMethodCount"] = sum(row["depreciationMethod"] == "units_of_production" for row in details)
     category_groups = _group(details, "category")
     department_groups = _group(details, "department")
+    account_groups = _group(details, "accountCode")
     return {
         "fromDate": start.isoformat(), "toDate": end.isoformat(), "details": details,
-        "totals": totals, "categories": category_groups, "departments": department_groups,
+        "totals": totals, "categories": category_groups, "departments": department_groups, "accounts": account_groups,
         "disposals": sorted(disposals, key=lambda r: (r["disposalDate"], r["code"])),
         "filters": {"category": category, "department": department, "status": status, "query": query},
         "notes": ["إهلاك طريقة وحدات الإنتاج لا يُحسب للفترة لعدم توفر سجل إنتاج مؤرخ؛ أدخل بيانات الإنتاج السنوي قبل الاعتماد."] if totals["unitMethodCount"] else [],
@@ -134,13 +157,14 @@ def build_asset_report(
 
 
 def _group(details: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
-    groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"group": "", "assetCount": 0, "totalCost": 0.0, "openingBookValue": 0.0, "additions": 0.0, "periodExpense": 0.0, "disposalBookValue": 0.0, "gainLoss": 0.0, "endingBookValue": 0.0})
+    metrics = ("totalCost", "openingBookValue", "additions", "periodExpense", "disposalBookValue", "proceeds", "disposalCosts", "gainLoss", "endingBookValue", "accumulatedDepreciation")
+    groups: dict[str, dict[str, Any]] = defaultdict(lambda: {"group": "", "assetCount": 0, **{metric: 0.0 for metric in metrics}})
     for row in details:
         label = str(row.get(key) or "غير محدد")
         entry = groups[label]
         entry["group"] = label
         entry["assetCount"] += 1
-        for metric in ("totalCost", "openingBookValue", "additions", "periodExpense", "disposalBookValue", "gainLoss", "endingBookValue"):
+        for metric in metrics:
             entry[metric] += float(row.get(metric, 0) or 0)
     return sorted(groups.values(), key=lambda item: (-item["endingBookValue"], item["group"]))
 
@@ -155,14 +179,18 @@ def report_view(report: dict[str, Any], kind: str) -> tuple[list[str], list[list
         headers = ["الإدارة", "عدد الأصول", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "إهلاك الفترة", "قيمة استبعادات", "الربح / (الخسارة)", "رصيد آخر المدة"]
         rows = [[r["group"], r["assetCount"], r["totalCost"], r["openingBookValue"], r["additions"], r["periodExpense"], r["disposalBookValue"], r["gainLoss"], r["endingBookValue"]] for r in report["departments"]]
         return headers, rows, kind
+    if kind == "حسب الحساب":
+        headers = ["رمز الحساب", "عدد الأصول", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "إهلاك الفترة", "قيمة استبعادات", "الربح / (الخسارة)", "رصيد آخر المدة"]
+        rows = [[r["group"], r["assetCount"], r["totalCost"], r["openingBookValue"], r["additions"], r["periodExpense"], r["disposalBookValue"], r["gainLoss"], r["endingBookValue"]] for r in report["accounts"]]
+        return headers, rows, kind
     if kind == "الاستبعادات":
         headers = ["تاريخ الاستبعاد", "رمز الأصل", "اسم الأصل", "الفئة", "الإدارة", "القيمة الدفترية", "متحصلات البيع", "تكاليف الاستبعاد", "الربح / (الخسارة)", "المشتري / الجهة", "السبب"]
         rows = [[r["disposalDate"], r["code"], r["name"], r["category"], r["department"], r["bookValue"], r["salePrice"], r["disposalCosts"], r["gainLoss"], r["buyerName"], r["reason"]] for r in report["disposals"]]
         return headers, rows, kind
     if kind == "الإهلاك للفترة":
-        headers = ["رمز الأصل", "اسم الأصل", "الفئة", "الإدارة", "طريقة الإهلاك", "رصيد أول المدة", "مصروف الإهلاك", "مجمع الإهلاك آخر المدة", "صافي القيمة آخر المدة", "ملاحظة"]
-        rows = [[r["code"], r["name"], r["category"], r["department"], r["methodLabel"], r["openingBookValue"], r["periodExpense"], r["accumulatedDepreciation"], r["endingBookValue"], r["expenseNote"]] for r in report["details"]]
+        headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "الإدارة", "طريقة الإهلاك", "رصيد أول المدة", "مصروف الإهلاك", "مجمع الإهلاك آخر المدة", "صافي القيمة آخر المدة", "ملاحظة"]
+        rows = [[r["code"], r["accountCode"], r["name"], r["category"], r["department"], r["methodLabel"], r["openingBookValue"], r["periodExpense"], r["accumulatedDepreciation"], r["endingBookValue"], r["expenseNote"]] for r in report["details"]]
         return headers, rows, kind
-    headers = ["رمز الأصل", "اسم الأصل", "الفئة", "الإدارة", "الحالة", "تاريخ الشراء", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "مصروف الإهلاك", "قيمة الأصل المستبعد", "متحصلات البيع", "الربح / (الخسارة)", "صافي القيمة آخر المدة"]
-    rows = [[r["code"], r["name"], r["category"], r["department"], r["statusLabel"], r["purchaseDate"], r["totalCost"], r["openingBookValue"], r["additions"], r["periodExpense"], r["disposalBookValue"], r["proceeds"], r["gainLoss"], r["endingBookValue"]] for r in report["details"]]
+    headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "الإدارة", "الحالة", "تاريخ الشراء", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "مصروف الإهلاك", "قيمة الأصل المستبعد", "متحصلات البيع", "الربح / (الخسارة)", "صافي القيمة آخر المدة"]
+    rows = [[r["code"], r["accountCode"], r["name"], r["category"], r["department"], r["statusLabel"], r["purchaseDate"], r["totalCost"], r["openingBookValue"], r["additions"], r["periodExpense"], r["disposalBookValue"], r["proceeds"], r["gainLoss"], r["endingBookValue"]] for r in report["details"]]
     return headers, rows, "حركة الأصول للفترة"

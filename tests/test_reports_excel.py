@@ -71,7 +71,7 @@ class ExcelImportExportTests(unittest.TestCase):
 
     def _valid_values(self, **updates):
         values = {
-            "code": "AST-NEW", "name": "أصل مستورد", "category": "المباني والإنشاءات",
+            "code": "AST-NEW", "accountCode": "1500", "name": "أصل مستورد", "category": "المباني والإنشاءات",
             "purchaseDate": "2024-01-01", "inServiceDate": "2024-01-01", "purchaseCost": 12000,
             "additionalCosts": 100, "salvageValue": 2000, "usefulLifeYears": 5,
             "depreciationMethod": "القسط الثابت", "startDepreciationRule": "منتصف الشهر (١–١٥)", "status": "نشط",
@@ -99,6 +99,7 @@ class ExcelImportExportTests(unittest.TestCase):
             self.assertEqual(batch["duplicateCount"], 1)
             self.assertEqual(batch["assets"][0]["purchaseCost"], 12000)
             self.assertEqual(batch["assets"][0]["department"], "الإدارة العامة")
+            self.assertEqual(batch["assets"][0]["accountCode"], "1500")
 
     def test_disposed_asset_import_restores_disposal_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -125,12 +126,12 @@ class ExcelImportExportTests(unittest.TestCase):
             export_report_workbook(report_path, report, "شركة الاختبار", "ريال يمني")
             register = load_workbook(register_path)
             period = load_workbook(report_path)
-            self.assertEqual(len(register.sheetnames), 5)
+            self.assertEqual(len(register.sheetnames), 6)
             self.assertTrue(all(register[s].sheet_view.rightToLeft for s in register.sheetnames))
             self.assertIn("ملخص الفئات", register.sheetnames)
-            self.assertEqual(len(period.sheetnames), 5)
+            self.assertEqual(len(period.sheetnames), 6)
             self.assertTrue(all(period[s].sheet_view.rightToLeft for s in period.sheetnames))
-            self.assertEqual(period["التفاصيل"].cell(6, 2).value, "أصل اختباري")
+            self.assertEqual(period["التفاصيل"].cell(6, 3).value, "أصل اختباري")
             self.assertTrue(period["الملخص التنفيذي"]._charts)
 
     def test_formula_like_asset_text_is_plain_text_in_all_report_exports(self):
@@ -147,18 +148,18 @@ class ExcelImportExportTests(unittest.TestCase):
 
             register = load_workbook(register_path, data_only=False)
             details = register["سجل الأصول"]
-            self.assertEqual(details["B6"].value, payload)
-            self.assertEqual(details["B6"].data_type, "s")
+            self.assertEqual(details["C6"].value, payload)
+            self.assertEqual(details["C6"].data_type, "s")
             self.assertEqual(details["C6"].data_type, "s")
             self.assertEqual(register["نظرة عامة"]["B20"].value, "@SUM(1,1)")
             self.assertEqual(register["نظرة عامة"]["B20"].data_type, "s")
 
             period = load_workbook(period_path, data_only=False)
-            self.assertEqual(period["التفاصيل"]["B6"].value, payload)
-            self.assertEqual(period["التفاصيل"]["B6"].data_type, "s")
+            self.assertEqual(period["التفاصيل"]["C6"].value, payload)
+            self.assertEqual(period["التفاصيل"]["C6"].data_type, "s")
             with csv_path.open(encoding="utf-8-sig", newline="") as stream:
                 rows = list(csv.reader(stream))
-            self.assertEqual(rows[1][1], "'" + payload)
+            self.assertEqual(rows[1][2], "'" + payload)
 
     def test_save_many_rolls_back_every_asset_on_duplicate_code(self):
         with tempfile.TemporaryDirectory() as directory:

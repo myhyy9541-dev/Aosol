@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from aosol_core import CATEGORIES, STATUSES
-from aosol_excel import export_report_csv, export_report_workbook
+from aosol_excel import CUSTOM_DETAIL_FIELDS, export_custom_period_workbook, export_report_csv, export_report_workbook
 from aosol_reports import build_asset_report, report_view
 from ui_components import ScrollableFrame
 
@@ -22,7 +22,7 @@ BORDER = "#e2e8f0"
 
 
 class ReportsDialog(tk.Toplevel):
-    REPORT_KINDS = ["حركة الأصول للفترة", "الإهلاك للفترة", "حسب التصنيف", "حسب الإدارة", "الاستبعادات"]
+    REPORT_KINDS = ["حركة الأصول للفترة", "الإهلاك للفترة", "حسب الحساب", "حسب التصنيف", "حسب الإدارة", "الاستبعادات"]
 
     def __init__(self, parent: tk.Misc, assets: list[dict[str, Any]], company: str, currency: str):
         super().__init__(parent)
@@ -88,6 +88,7 @@ class ReportsDialog(tk.Toplevel):
         search_entry.bind("<Return>", lambda _event: self.generate())
         self._button(row2, "تحديث التقرير", self.generate, primary=True).pack(side="left", padx=5, pady=5)
         self._button(row2, "تصدير Excel / CSV", self.export).pack(side="left", padx=5, pady=5)
+        self._button(row2, "Excel مخصص للفترة", self.custom_export).pack(side="left", padx=5, pady=5)
 
         self.kpi_frame = tk.Frame(page, bg=BG)
         self.kpi_frame.pack(fill="x", padx=16, pady=(2, 8))
@@ -189,3 +190,183 @@ class ReportsDialog(tk.Toplevel):
             messagebox.showinfo("تم التصدير", f"تم حفظ التقرير:\n{path}", parent=self)
         except Exception as exc:
             messagebox.showerror("تعذر التصدير", str(exc), parent=self)
+
+    def custom_export(self) -> None:
+        if not self.report:
+            return
+        CustomExcelDialog(self, self.assets, self.report, self.company, self.currency, {
+            "category": self.category_var.get(), "department": self.department_var.get(),
+            "status": self.status_var.get(), "query": self.query_var.get(),
+        })
+
+
+class CustomExcelDialog(tk.Toplevel):
+    DEFAULT_COLUMNS = {
+        "code", "accountCode", "name", "category", "department", "totalCost",
+        "openingBookValue", "additions", "periodExpense", "disposalBookValue",
+        "gainLoss", "endingBookValue",
+    }
+
+    def __init__(self, parent: ReportsDialog, assets: list[dict[str, Any]], report: dict[str, Any], company: str, currency: str, filters: dict[str, str]):
+        super().__init__(parent)
+        self.parent, self.assets, self.report = parent, assets, report
+        self.company, self.currency, self.filters = company, currency, filters
+        self.title("Aosol | إعداد تقرير Excel مخصص")
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        width, height = min(1000, max(760, sw - 40)), min(850, max(520, sh - 70))
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(width, 700), min(height, 500))
+        self.configure(bg=BG)
+        self.transient(parent)
+        self.grab_set()
+
+        self.from_var = tk.StringVar(value=report["fromDate"])
+        self.to_var = tk.StringVar(value=report["toDate"])
+        self.granularity_var = tk.StringVar(value="شهري")
+        self.orientation_var = tk.StringVar(value="landscape")
+        self.total_var = tk.BooleanVar(value=True)
+        self.section_vars = {
+            "include_overall": tk.BooleanVar(value=True),
+            "include_periods": tk.BooleanVar(value=True),
+            "include_details": tk.BooleanVar(value=True),
+            "include_accounts": tk.BooleanVar(value=True),
+            "include_categories": tk.BooleanVar(value=True),
+            "include_departments": tk.BooleanVar(value=True),
+        }
+        self.column_vars = {key: tk.BooleanVar(value=key in self.DEFAULT_COLUMNS) for key, _label in CUSTOM_DETAIL_FIELDS}
+        category, department, query = filters.get("category", "الكل"), filters.get("department", "الكل"), filters.get("query", "").strip().casefold()
+        self.rows = [
+            asset for asset in assets
+            if (category == "الكل" or asset.get("category", "") == category)
+            and (department == "الكل" or asset.get("department", "") == department)
+            and (not query or any(query in str(asset.get(key, "") or "").casefold() for key in ("code", "name", "department", "location", "custodian", "serialNumber")))
+        ]
+        self._layout()
+
+    def _button(self, parent: tk.Widget, text: str, command: Any, primary: bool = False) -> tk.Button:
+        return tk.Button(parent, text=text, command=command, bg=TEAL if primary else WHITE, fg=WHITE if primary else NAVY,
+                         activebackground="#0e8d84" if primary else "#edf3f8", activeforeground=WHITE if primary else NAVY,
+                         font=("Tahoma", 9, "bold"), relief="flat", bd=0, padx=13, pady=8, cursor="hand2",
+                         highlightthickness=0 if primary else 1, highlightbackground=BORDER)
+
+    def _layout(self) -> None:
+        header = tk.Frame(self, bg=NAVY, height=66)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+        tk.Label(header, text="تخصيص تقرير Excel", bg=NAVY, fg=WHITE, font=("Tahoma", 15, "bold"), anchor="e").pack(side="right", padx=20, pady=17)
+        self.page_scroll = ScrollableFrame(self, background=BG)
+        self.page_scroll.pack(fill="both", expand=True, padx=12, pady=8)
+        page = self.page_scroll.content
+
+        period = tk.LabelFrame(page, text="الفترة والتخطيط", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=10)
+        period.pack(fill="x", padx=8, pady=(5, 9))
+        self._form_field(period, "نوع التقرير", self.granularity_var, ["شهري", "سنوي", "الفترة كاملة"], 15)
+        self._form_field(period, "من تاريخ (YYYY-MM-DD)", self.from_var, None, 18)
+        self._form_field(period, "إلى تاريخ (YYYY-MM-DD)", self.to_var, None, 18)
+        self._form_field(period, "اتجاه ورقة A4", self.orientation_var, ["landscape", "portrait"], 14, labels={"landscape": "أفقي", "portrait": "عمودي"})
+
+        scope = tk.LabelFrame(page, text="الصفوف / الأصول المشمولة — اختر سجلًا أو أكثر", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=8)
+        scope.pack(fill="x", padx=8, pady=8)
+        tk.Label(scope, text="القائمة تتبع مرشحات الفئة والإدارة والبحث الحالية؛ الحالة والفترة يعاد تطبيقهما عند التصدير. رمز الحساب اختياري، وتظهر الأصول بلا رمز ضمن (غير محدد).", bg=WHITE, fg=MUTED, font=("Tahoma", 8), anchor="e", justify="right", wraplength=850).pack(fill="x", pady=(0, 6))
+        list_wrap = tk.Frame(scope, bg=WHITE)
+        list_wrap.pack(fill="x")
+        self.asset_list = tk.Listbox(list_wrap, selectmode=tk.EXTENDED, height=7, exportselection=False, justify="right", font=("Tahoma", 9), relief="solid", bd=1, selectbackground="#d9f2f0", selectforeground=NAVY)
+        scroll = ttk.Scrollbar(list_wrap, orient="vertical", command=self.asset_list.yview)
+        self.asset_list.configure(yscrollcommand=scroll.set)
+        self.asset_list.pack(side="right", fill="x", expand=True)
+        scroll.pack(side="left", fill="y")
+        self.asset_codes: list[str] = []
+        for row in self.rows:
+            code = str(row.get("code", ""))
+            self.asset_codes.append(code)
+            self.asset_list.insert("end", f"{code}  |  {row.get('name', '')}")
+        if self.asset_codes:
+            self.asset_list.selection_set(0, "end")
+        row_buttons = tk.Frame(scope, bg=WHITE)
+        row_buttons.pack(fill="x", pady=(6, 0))
+        self._button(row_buttons, "تحديد كل الأصول", lambda: self.asset_list.selection_set(0, "end")).pack(side="right", padx=3)
+        self._button(row_buttons, "إلغاء التحديد", lambda: self.asset_list.selection_clear(0, "end")).pack(side="right", padx=3)
+
+        sections = tk.LabelFrame(page, text="الأوراق / الإجماليات التي ستظهر في المصنف", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=8)
+        sections.pack(fill="x", padx=8, pady=8)
+        section_labels = [
+            ("include_overall", "الإجماليات العامة"), ("include_periods", "ملخص شهري / سنوي"),
+            ("include_details", "تفاصيل الأصول والأعمدة المختارة"), ("include_accounts", "إجماليات حسب رمز الحساب"),
+            ("include_categories", "إجماليات حسب التصنيف"), ("include_departments", "إجماليات حسب الإدارة"),
+        ]
+        for index, (key, label) in enumerate(section_labels):
+            cb = tk.Checkbutton(sections, text=label, variable=self.section_vars[key], bg=WHITE, fg=INK, activebackground=WHITE, font=("Tahoma", 9), anchor="e", justify="right")
+            cb.grid(row=index // 3, column=2 - index % 3, sticky="e", padx=12, pady=5)
+        for column in range(3):
+            sections.columnconfigure(column, weight=1)
+        tk.Checkbutton(sections, text="إضافة صف الإجمالي العام أسفل الجداول (وإجمالي الحركات للفترات)", variable=self.total_var, bg=WHITE, fg=INK, activebackground=WHITE, font=("Tahoma", 9), anchor="e", justify="right").grid(row=2, column=0, columnspan=3, sticky="e", padx=12, pady=(6, 2))
+
+        columns = tk.LabelFrame(page, text="الأعمدة المختارة لورقة تفاصيل الأصول", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=8)
+        columns.pack(fill="x", padx=8, pady=8)
+        col_actions = tk.Frame(columns, bg=WHITE)
+        col_actions.pack(fill="x", pady=(0, 4))
+        self._button(col_actions, "تحديد الكل", lambda: [variable.set(True) for variable in self.column_vars.values()]).pack(side="right", padx=3)
+        self._button(col_actions, "إلغاء الكل", lambda: [variable.set(False) for variable in self.column_vars.values()]).pack(side="right", padx=3)
+        column_grid = tk.Frame(columns, bg=WHITE)
+        column_grid.pack(fill="x")
+        for index, (key, label) in enumerate(CUSTOM_DETAIL_FIELDS):
+            cb = tk.Checkbutton(column_grid, text=label, variable=self.column_vars[key], bg=WHITE, fg=INK, activebackground=WHITE, font=("Tahoma", 9), anchor="e", justify="right")
+            cb.grid(row=1 + index // 4, column=3 - index % 4, sticky="e", padx=8, pady=3)
+        for column in range(4):
+            column_grid.columnconfigure(column, weight=1)
+        tk.Label(page, text="الإجماليات حسب الحساب تستخدم رمز الحساب الاختياري في سجل الأصل؛ إذا لم يُدخل رمز فسيظهر تحت «غير محدد». يظل تفصيل الحساب مطابقًا للأصول المحددة والمرشحات الحالية.", bg=BG, fg=MUTED, font=("Tahoma", 9), anchor="e", justify="right", wraplength=900).pack(fill="x", padx=15, pady=(4, 12))
+
+        footer = tk.Frame(self, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+        footer.pack(fill="x", side="bottom")
+        self._button(footer, "إنشاء ملف Excel", self.export, primary=True).pack(side="left", padx=12, pady=9)
+        self._button(footer, "إغلاق", self.destroy).pack(side="left", padx=4, pady=9)
+
+    def _form_field(self, parent: tk.Widget, label: str, variable: tk.StringVar, values: list[str] | None, width: int, labels: dict[str, str] | None = None) -> None:
+        box = tk.Frame(parent, bg=WHITE)
+        box.pack(side="right", padx=6, pady=4)
+        tk.Label(box, text=label, bg=WHITE, fg=MUTED, font=("Tahoma", 8)).pack(anchor="e")
+        if values:
+            display_values = [labels.get(value, value) for value in values] if labels else values
+            reverse = {display: actual for actual, display in zip(values, display_values)}
+            shown = tk.StringVar(value=labels.get(variable.get(), variable.get()) if labels else variable.get())
+            combo = ttk.Combobox(box, textvariable=shown, values=display_values, state="readonly", width=width, justify="right")
+            combo.pack(ipady=3)
+            combo.bind("<<ComboboxSelected>>", lambda _e, v=variable, s=shown, r=reverse: v.set(r.get(s.get(), s.get())))
+        else:
+            tk.Entry(box, textvariable=variable, justify="right", width=width, font=("Tahoma", 9), relief="solid", bd=1).pack(ipady=4)
+
+    def export(self) -> None:
+        try:
+            start, end = date.fromisoformat(self.from_var.get().strip()), date.fromisoformat(self.to_var.get().strip())
+            if start > end:
+                raise ValueError("تاريخ البداية يجب ألا يتجاوز تاريخ النهاية.")
+            selected_indices = self.asset_list.curselection()
+            if not selected_indices:
+                raise ValueError("حدد أصلًا واحدًا على الأقل.")
+            selected_codes = {self.asset_codes[index] for index in selected_indices}
+            chosen_columns = [key for key, _label in CUSTOM_DETAIL_FIELDS if self.column_vars[key].get()]
+            options = {key: variable.get() for key, variable in self.section_vars.items()}
+            if not any(options.values()):
+                raise ValueError("حدد ورقة واحدة على الأقل.")
+            if options["include_details"] and not chosen_columns:
+                raise ValueError("حدد عمودًا واحدًا على الأقل لتفاصيل الأصول.")
+        except Exception as exc:
+            messagebox.showerror("راجع إعدادات التقرير", str(exc), parent=self)
+            return
+        mode_label = self.granularity_var.get().replace(" ", "_")
+        path = filedialog.asksaveasfilename(parent=self, title="حفظ تقرير Excel المخصص", defaultextension=".xlsx", initialfile=f"تقرير_{mode_label}_{start.isoformat()}_{end.isoformat()}.xlsx", filetypes=[("Excel Workbook", "*.xlsx")])
+        if not path:
+            return
+        orientation = self.orientation_var.get()
+        orientation = "landscape" if orientation == "أفقي" else "portrait" if orientation == "عمودي" else orientation
+        try:
+            export_custom_period_workbook(
+                path, self.assets, self.company, self.currency, start, end,
+                granularity=self.granularity_var.get(), selected_codes=selected_codes,
+                columns=chosen_columns, include_detail_total=self.total_var.get(),
+                orientation=orientation, filters=self.filters, **options,
+            )
+            messagebox.showinfo("اكتمل التصدير", f"تم إنشاء تقرير Excel بنجاح:\n{path}", parent=self)
+            self.destroy()
+        except Exception as exc:
+            messagebox.showerror("تعذر إنشاء التقرير", str(exc), parent=self)

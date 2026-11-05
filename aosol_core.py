@@ -11,6 +11,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from aosol_config import configured_data_directory
+
 APP_NAME = "Aosol"
 METHODS = {
     "straight_line": "القسط الثابت",
@@ -36,15 +38,7 @@ def safe_spreadsheet_text(value: Any) -> Any:
 
 
 def data_directory() -> Path:
-    if sys.platform == "win32":
-        root = Path(os.environ.get("APPDATA", Path.home()))
-        path = root / APP_NAME
-    elif sys.platform == "darwin":
-        path = Path.home() / "Library" / "Application Support" / APP_NAME
-    else:
-        path = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME.lower()
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return configured_data_directory()
 
 
 def money(value: Any) -> float:
