@@ -210,7 +210,7 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
               ملف <strong>Aosol.exe</strong> غير موقّع بشهادة ناشر Authenticode، ولم يُجرَ عليه فحص مستقل بمضاد فيروسات Windows؛ لذلك قد يعرض SmartScreen أو مضاد الفيروسات تحذيرًا. لا يمكن ضمان خلوّه 100%، ولا تتجاوز تحذير الحماية تلقائيًا.
             </p>
             <div className="pt-2 border-t border-amber-800/40 text-[10px] text-slate-300 font-mono-numbers break-all">
-              SHA-256 لـ Aosol.exe: 1b4f49954368aaac754d77e5f23400ad9e32ab641ce84c4bc0b3e473eefc0b30
+              SHA-256 لـ Aosol.exe: 9e45192baec4909f4df3799dd97af7f26320729b5030c4a0fafbde0c2d4a4852
             </div>
           </div>
         </div>
