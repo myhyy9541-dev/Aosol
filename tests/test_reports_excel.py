@@ -101,6 +101,20 @@ class ExcelImportExportTests(unittest.TestCase):
             self.assertEqual(batch["assets"][0]["department"], "الإدارة العامة")
             self.assertEqual(batch["assets"][0]["accountCode"], "1500")
 
+    def test_custom_category_is_in_excel_dropdown_and_imported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "custom-categories.xlsx"
+            categories = ["المباني والإنشاءات", "الأجهزة الطبية والمخبرية"]
+            export_import_template(path, categories)
+            workbook = load_workbook(path)
+            self.assertEqual(workbook["قوائم"].sheet_state, "hidden")
+            self.assertEqual(workbook.defined_names["AosolCategoryOptions"].attr_text, "'قوائم'!$A$1:$A$2")
+            self._write_template_row(workbook["قالب الأصول"], 2, self._valid_values(category="الأجهزة الطبية والمخبرية"))
+            workbook.save(path)
+            batch = parse_import_file(path, categories=categories)
+            self.assertEqual(batch["validCount"], 1, batch["issues"])
+            self.assertEqual(batch["assets"][0]["category"], "الأجهزة الطبية والمخبرية")
+
     def test_disposed_asset_import_restores_disposal_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "template.xlsx"

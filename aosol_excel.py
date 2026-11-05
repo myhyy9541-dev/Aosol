@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from aosol_core import CATEGORIES, METHODS, STATUSES, money, safe_spreadsheet_text, valuation
+from aosol_core import CATEGORIES, METHODS, STATUSES, money, normalize_categories, safe_spreadsheet_text, valuation
 from aosol_reports import build_asset_report, period_ranges, report_view
 
 NAVY = "13233A"
@@ -261,9 +261,10 @@ def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, 
         sheet.column_dimensions[get_column_letter(col)].width = min(38, max(14, max_len + 3))
 
 
-def export_import_template(path: str | Path) -> None:
+def export_import_template(path: str | Path, categories: list[str] | None = None) -> None:
     """Export an import-ready blank template with a dedicated instruction sheet."""
     Workbook, _load, _chart, _ref, _scale, _bars, Alignment, Border, Font, PatternFill, Side, DataValidation = _openpyxl()
+    category_options = normalize_categories(categories if categories is not None else CATEGORIES)
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "قالب الأصول"
@@ -305,12 +306,27 @@ def export_import_template(path: str | Path) -> None:
             elif kind in ("money", "number"):
                 cell.number_format = "#,##0.00"
     columns = {field: index for index, (field, _header, _kind) in enumerate(TEMPLATE_COLUMNS, 1)}
-    category_values = ",".join(CATEGORIES)
     method_values = ",".join(METHODS.values())
     rule_values = ",".join(RULE_LABELS.values())
     status_values = ",".join(STATUSES.values())
     disposal_type_values = ",".join(DISPOSAL_TYPES.values())
-    for field, values in (("category", category_values), ("depreciationMethod", method_values), ("startDepreciationRule", rule_values), ("status", status_values), ("disposalType", disposal_type_values)):
+    option_sheet = workbook.create_sheet("قوائم")
+    option_sheet.sheet_view.rightToLeft = True
+    option_sheet.sheet_state = "hidden"
+    for row, category in enumerate(category_options, 1):
+        option_sheet.cell(row, 1, category)
+    from openpyxl.workbook.defined_name import DefinedName
+    workbook.defined_names.add(DefinedName("AosolCategoryOptions", attr_text=f"'قوائم'!$A$1:$A${len(category_options)}"))
+    category_validation = DataValidation(type="list", formula1="=AosolCategoryOptions", allow_blank=True)
+    category_validation.errorTitle = "قيمة غير معتمدة"
+    category_validation.error = "اختر تصنيفًا معرّفًا في تطبيق Aosol."
+    category_validation.promptTitle = "اختيار التصنيف"
+    category_validation.prompt = "تُحدّث التصنيفات عند إنشاء القالب من داخل التطبيق."
+    category_validation.showErrorMessage = True
+    category_validation.showInputMessage = True
+    sheet.add_data_validation(category_validation)
+    category_validation.add(f"{__import__('openpyxl').utils.get_column_letter(columns['category'])}2:{__import__('openpyxl').utils.get_column_letter(columns['category'])}501")
+    for field, values in (("depreciationMethod", method_values), ("startDepreciationRule", rule_values), ("status", status_values), ("disposalType", disposal_type_values)):
         dv = DataValidation(type="list", formula1=f'"{values}"', allow_blank=True)
         dv.errorTitle = "قيمة غير معتمدة"
         dv.error = "اختر قيمة من القائمة المنسدلة في الخلية."
@@ -352,7 +368,7 @@ def export_import_template(path: str | Path) -> None:
         ("طريقة الاستخدام", "أدخل كل أصل في صف مستقل بورقة «قالب الأصول»، ثم احفظ الملف بصيغة .xlsx واستورده من تطبيق Aosol."),
         ("الحقول المطلوبة", "الحقول التي تنتهي بعلامة * مطلوبة. لا تغيّر أسماء الأعمدة ولا تحذف ورقة قالب الأصول."),
         ("التواريخ", "استخدم صيغة YYYY-MM-DD (مثال 2026-01-31). يقبل الاستيراد أيضًا خلايا Excel المعرفة كتاريخ."),
-        ("القيم المنسدلة", "اختر الفئة وطريقة الإهلاك وقاعدة البدء والحالة من القوائم. لا تدخل قيمة خارج القائمة."),
+        ("القيم المنسدلة", "اختر التصنيف وطريقة الإهلاك وقاعدة البدء والحالة من القوائم. يعكس قالب التصنيفات الحالية في التطبيق."),
         ("المبالغ والأعمار", "أدخل أرقامًا غير سالبة من دون كتابة رمز العملة. تكلفة الشراء يجب أن تكون أكبر من صفر، والعمر سنة أو أكثر."),
         ("الوحدات", "املأ الوحدات المقدرة والمنتجة عند اختيار طريقة وحدات الإنتاج. لا يحتسب التقرير مصروف فترة دقيقًا دون سجل وحدات مؤرخ."),
         ("التكرارات والأخطاء", "يفحص التطبيق رمز الأصل في الملف وقاعدة البيانات. تظهر معاينة وأسباب الصفوف المرفوضة قبل حفظ أي أصل."),
@@ -372,7 +388,7 @@ def export_import_template(path: str | Path) -> None:
     workbook.save(path)
 
 
-def parse_import_file(path: str | Path, existing_codes: set[str] | list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+def parse_import_file(path: str | Path, existing_codes: set[str] | list[str] | tuple[str, ...] = (), categories: list[str] | None = None) -> dict[str, Any]:
     """Read an Aosol template / recognized CSV and validate every non-empty row."""
     path = Path(path)
     if path.suffix.lower() == ".csv":
@@ -415,7 +431,8 @@ def parse_import_file(path: str | Path, existing_codes: set[str] | list[str] | t
     issues: list[dict[str, Any]] = []
     duplicate_count = 0
     rows_scanned = 0
-    cat_by_norm = {_normalise_header(name): name for name in CATEGORIES}
+    category_names = normalize_categories(categories if categories is not None else CATEGORIES)
+    cat_by_norm = {_normalise_header(name): name for name in category_names}
     cat_by_norm.update({_normalise_header(key): label for label, key in (("المباني والإنشاءات", "buildings"), ("الآلات وخطوط الإنتاج والمولدات", "machinery"), ("المركبات ووسائل النقل", "vehicles"), ("منظومات الطاقة والكهرباء", "solar_energy"), ("منظومات الطاقة الشمسية والكهرباء", "solar_energy"), ("أجهزة الكمبيوتر والتقنية", "computers"), ("أجهزة الكمبيوتر والتقنية والشبكات", "computers"), ("الأثاث والتجهيزات المكتبية", "furniture"), ("المعدات الثقيلة والحفارات", "heavy_equipment"))})
     method_by_norm = {_normalise_header(label): key for key, label in METHODS.items()}
     method_by_norm.update({_normalise_header(key): key for key in METHODS})

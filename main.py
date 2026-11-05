@@ -13,7 +13,7 @@ from aosol_config import (
     prepare_writable_directory, save_app_preferences, write_backup_snapshot,
 )
 from aosol_core import (
-    APP_NAME, CATEGORIES, METHODS, STATUSES, AssetStore, demo_assets,
+    APP_NAME, METHODS, STATUSES, AssetStore, demo_assets,
     depreciation_schedule, export_csv, money, valuation,
 )
 from aosol_excel import DISPOSAL_TYPES, export_assets_workbook, export_import_template, parse_import_file
@@ -46,6 +46,7 @@ class AosolApp(tk.Tk):
         self.minsize(min(width, 900), min(height, 560))
         self.configure(bg=BG)
         self.store = AssetStore()
+        self.categories = self.store.get_categories()
         self.assets: list[dict[str, Any]] = []
         self.currency = self.store.get_setting("currency") or "ريال يمني"
         self.company = self.store.get_setting("company_name") or "شركة سبأ للتجارة والاستثمار المحدودة"
@@ -98,7 +99,7 @@ class AosolApp(tk.Tk):
         nav.pack_propagate(False)
         for label, callback, selected in [
             ("لوحة الأصول", self.focus_assets, True), ("التقارير والإهلاك", self.open_reports, False),
-            ("النسخ والاستعادة", self.backup, False), ("الإعدادات", self.settings, False),
+            ("التصنيفات", self.manage_categories, False), ("النسخ والاستعادة", self.backup, False), ("الإعدادات", self.settings, False),
         ]:
             color = TEAL if selected else MUTED
             tk.Button(nav, text=label, command=callback, bg=WHITE, fg=color, activebackground="#f4f8fb", activeforeground=TEAL, font=("Tahoma", 10, "bold" if selected else "normal"), relief="flat", padx=18, pady=12, cursor="hand2", bd=0).pack(side="right", padx=4)
@@ -138,6 +139,9 @@ class AosolApp(tk.Tk):
 
     def refresh(self) -> None:
         self.assets = self.store.all()
+        self.categories = self.store.get_categories()
+        if self.category_filter_var.get() not in ("الكل", *self.categories):
+            self.category_filter_var.set("الكل")
         for child in self.content.winfo_children():
             child.destroy()
         active = [a for a in self.assets if a.get("status") != "disposed"]
@@ -164,7 +168,7 @@ class AosolApp(tk.Tk):
         self.status_combo = ttk.Combobox(controls, textvariable=self.status_var, state="readonly", values=["الكل", *STATUSES.values()], width=14, justify="right")
         self.status_combo.pack(side="left", padx=(0, 7))
         self.status_combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
-        self.category_combo = ttk.Combobox(controls, textvariable=self.category_filter_var, state="readonly", values=["الكل", *CATEGORIES], width=22, justify="right")
+        self.category_combo = ttk.Combobox(controls, textvariable=self.category_filter_var, state="readonly", values=["الكل", *self.categories], width=22, justify="right")
         self.category_combo.pack(side="left", padx=(0, 7))
         self.category_combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
         self.method_combo = ttk.Combobox(controls, textvariable=self.method_filter_var, state="readonly", values=["الكل", *METHODS.values()], width=22, justify="right")
@@ -371,6 +375,9 @@ class AosolApp(tk.Tk):
             return
         ReportsDialog(self, self.assets, self.company, self.currency)
 
+    def manage_categories(self) -> None:
+        CategoryManagerDialog(self, self.store)
+
     def report(self) -> None:
         asset = self.selected_asset() if hasattr(self, "tree") and self.tree.selection() else None
         if not asset:
@@ -442,7 +449,7 @@ class AosolApp(tk.Tk):
         if not path:
             return
         try:
-            export_import_template(path)
+            export_import_template(path, self.categories)
             messagebox.showinfo("تم إنشاء القالب", f"املأ ورقة «قالب الأصول» ثم اختر استيراد من التطبيق.\n\n{path}", parent=self)
         except Exception as exc:
             messagebox.showerror("تعذر إنشاء القالب", str(exc), parent=self)
@@ -514,7 +521,7 @@ class AosolApp(tk.Tk):
                 messagebox.showinfo("اكتملت الاستعادة", f"تم استيراد {count} أصل من النسخة الاحتياطية.", parent=self)
                 return
             existing_codes = {str(asset.get("code", "")).strip() for asset in self.assets}
-            batch = parse_import_file(path, existing_codes)
+            batch = parse_import_file(path, existing_codes, self.categories)
             if batch["rowsScanned"] == 0:
                 messagebox.showinfo("لا توجد صفوف", "لم أجد بيانات أصول تحت صف العناوين. املأ ورقة «قالب الأصول» ثم أعد المحاولة.", parent=self)
                 return
@@ -566,6 +573,14 @@ class AosolApp(tk.Tk):
         tk.Label(currency_row, text="العملة", bg=WHITE, fg=INK, font=("Tahoma", 10), width=17, anchor="e").pack(side="right")
         currencies = ["ريال يمني", "ريال سعودي", "دولار أمريكي", "درهم إماراتي", "جنيه مصري", "دينار كويتي", "ريال قطري", "ريال عماني"]
         ttk.Combobox(currency_row, textvariable=currency_var, values=currencies, justify="right", font=("Tahoma", 10)).pack(side="left", fill="x", expand=True, ipady=5)
+
+        category_row = tk.Frame(form, bg="#f5f8fb", highlightbackground=BORDER, highlightthickness=1)
+        category_row.pack(fill="x", padx=20, pady=(12, 4))
+        category_text = tk.Frame(category_row, bg="#f5f8fb")
+        category_text.pack(side="right", fill="x", expand=True, padx=12, pady=9)
+        tk.Label(category_text, text="تصنيفات الأصول", bg="#f5f8fb", fg=NAVY, font=("Tahoma", 10, "bold"), anchor="e").pack(fill="x")
+        tk.Label(category_text, text=f"{len(self.categories)} تصنيفًا • يمكنك إضافة تصنيف أو تعديل الاسم وتحديث الأصول المرتبطة به.", bg="#f5f8fb", fg=MUTED, font=("Tahoma", 8), anchor="e").pack(fill="x", pady=(3, 0))
+        self._button(category_row, "إدارة التصنيفات", self.manage_categories, kind="primary").pack(side="left", padx=12, pady=9)
 
         tk.Label(form, text="موقع البيانات والنسخ الاحتياطية", bg=WHITE, fg=NAVY, font=("Tahoma", 11, "bold")).pack(anchor="e", padx=20, pady=(16, 6))
 
@@ -680,7 +695,7 @@ class AssetDialog(tk.Toplevel):
         form_scroll.pack(fill="both", expand=True, padx=6, pady=6)
         form = form_scroll.content
         form.configure(padx=18, pady=14)
-        defaults: dict[str, Any] = asset or {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "accountCode": "", "name": "", "category": CATEGORIES[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
+        defaults: dict[str, Any] = asset or {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "accountCode": "", "name": "", "category": parent.categories[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
         self.vars: dict[str, tk.Variable] = {}
         fields = [
             ("code", "رمز الأصل *", "entry"), ("accountCode", "رمز الحساب المحاسبي", "entry"), ("name", "اسم الأصل *", "entry"), ("category", "التصنيف", "category"), ("purchaseDate", "تاريخ الشراء", "entry"),
@@ -697,7 +712,7 @@ class AssetDialog(tk.Toplevel):
             variable = tk.StringVar(value=str(defaults.get(key, "")))
             self.vars[key] = variable
             if kind == "category":
-                control: tk.Widget = ttk.Combobox(cell, textvariable=variable, values=CATEGORIES, state="readonly", justify="right", font=("Tahoma", 9))
+                control: tk.Widget = ttk.Combobox(cell, textvariable=variable, values=parent.categories, state="readonly", justify="right", font=("Tahoma", 9))
             elif kind == "method":
                 control = ttk.Combobox(cell, textvariable=variable, values=list(METHODS.values()), state="readonly", justify="right", font=("Tahoma", 9))
                 reverse = {v: k for k, v in METHODS.items()}
@@ -756,6 +771,116 @@ class AssetDialog(tk.Toplevel):
             self.destroy()
         except Exception as exc:
             messagebox.showerror("تحقق من البيانات", str(exc), parent=self)
+
+
+class CategoryManagerDialog(tk.Toplevel):
+    def __init__(self, parent: AosolApp, store: AssetStore):
+        super().__init__(parent)
+        self.parent, self.store = parent, store
+        self.selected_category: str | None = None
+        self.title("إدارة تصنيفات الأصول")
+        screen_height = self.winfo_screenheight()
+        self.geometry(f"560x{min(620, max(480, screen_height - 100))}")
+        self.minsize(480, 460)
+        self.configure(bg=BG)
+        self.transient(parent)
+        self.grab_set()
+
+        header = tk.Frame(self, bg=NAVY)
+        header.pack(fill="x")
+        tk.Label(header, text="إدارة تصنيفات الأصول", bg=NAVY, fg=WHITE, font=("Tahoma", 15, "bold"), anchor="e").pack(fill="x", padx=22, pady=(15, 4))
+        tk.Label(header, text="أضف تصنيفًا جديدًا أو أعد تسمية تصنيف. إعادة التسمية تحدّث الأصول المرتبطة به تلقائيًا.", bg=NAVY, fg="#bdcadd", font=("Tahoma", 9), anchor="e", justify="right", wraplength=510).pack(fill="x", padx=22, pady=(0, 14))
+
+        body = tk.Frame(self, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
+        body.pack(fill="both", expand=True, padx=16, pady=14)
+        tk.Label(body, text="التصنيفات الحالية", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), anchor="e").pack(fill="x", padx=14, pady=(13, 7))
+        list_frame = tk.Frame(body, bg=WHITE)
+        list_frame.pack(fill="both", expand=True, padx=14)
+        self.listbox = tk.Listbox(list_frame, font=("Tahoma", 10), activestyle="none", selectmode="browse", exportselection=False, justify="right", relief="solid", bd=1, bg="#fbfcfe", fg=INK, selectbackground="#d9f2f0", selectforeground=NAVY)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscrollcommand=scrollbar.set)
+        self.listbox.pack(side="right", fill="both", expand=True)
+        scrollbar.pack(side="left", fill="y")
+        self.listbox.bind("<<ListboxSelect>>", self._on_select)
+
+        self.name_var = tk.StringVar()
+        row = tk.Frame(body, bg=WHITE)
+        row.pack(fill="x", padx=14, pady=(12, 4))
+        tk.Label(row, text="اسم التصنيف", bg=WHITE, fg=INK, font=("Tahoma", 9, "bold"), anchor="e").pack(fill="x", pady=(0, 4))
+        self.name_entry = tk.Entry(row, textvariable=self.name_var, justify="right", font=("Tahoma", 10), relief="solid", bd=1, bg="#fbfcfe", fg=INK, insertbackground=INK)
+        self.name_entry.pack(fill="x", ipady=6)
+        tk.Label(body, text="الاسم حتى 80 حرفًا؛ لا تكرر اسمًا موجودًا. لا يمكن حذف تصنيف مرتبط بأصل.", bg=WHITE, fg=MUTED, font=("Tahoma", 8), anchor="e", justify="right", wraplength=500).pack(fill="x", padx=14, pady=(2, 8))
+
+        actions = tk.Frame(body, bg=WHITE)
+        actions.pack(fill="x", padx=14, pady=(0, 14))
+        parent._button(actions, "إضافة", self._add, kind="primary").pack(side="right", padx=(0, 7))
+        parent._button(actions, "حفظ التعديل", self._rename).pack(side="right", padx=7)
+        parent._button(actions, "حذف غير المستخدم", self._delete, kind="danger").pack(side="left", padx=7)
+        parent._button(self, "إغلاق", self.destroy).pack(side="left", padx=18, pady=(0, 14))
+        self._reload()
+
+    def _reload(self, select: str | None = None) -> None:
+        self.categories = self.store.get_categories()
+        self.listbox.delete(0, tk.END)
+        for category in self.categories:
+            self.listbox.insert(tk.END, category)
+        self.selected_category = None
+        if select in self.categories:
+            index = self.categories.index(select)
+            self.listbox.selection_set(index)
+            self.listbox.see(index)
+            self.selected_category = select
+            self.name_var.set(select)
+        else:
+            self.name_var.set("")
+
+    def _on_select(self, _event: tk.Event | None = None) -> None:
+        selection = self.listbox.curselection()
+        self.selected_category = self.categories[selection[0]] if selection else None
+        if self.selected_category:
+            self.name_var.set(self.selected_category)
+
+    def _add(self) -> None:
+        try:
+            name = self.name_var.get().strip()
+            self.store.add_category(name)
+            self.parent.refresh()
+            self._reload(name)
+            messagebox.showinfo("تمت الإضافة", f"أُضيف التصنيف «{name}» بنجاح.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر إضافة التصنيف", str(exc), parent=self)
+
+    def _rename(self) -> None:
+        old = self.selected_category
+        if not old:
+            messagebox.showinfo("تعديل التصنيف", "حدد تصنيفًا من القائمة أولًا.", parent=self)
+            return
+        new = self.name_var.get().strip()
+        affected = sum(asset.get("category") == old for asset in self.store.all())
+        if affected and not messagebox.askyesno("تأكيد تعديل التصنيف", f"سيتم تغيير اسم التصنيف وتحديث {affected} أصل مرتبط به. هل تريد المتابعة؟", parent=self):
+            return
+        try:
+            updated = self.store.rename_category(old, new)
+            self.parent.refresh()
+            self._reload(new)
+            messagebox.showinfo("تم التعديل", f"تم تحديث اسم التصنيف بنجاح، وتحديث {updated} أصل.", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر تعديل التصنيف", str(exc), parent=self)
+
+    def _delete(self) -> None:
+        name = self.selected_category
+        if not name:
+            messagebox.showinfo("حذف التصنيف", "حدد تصنيفًا من القائمة أولًا.", parent=self)
+            return
+        if not messagebox.askyesno("تأكيد الحذف", f"حذف التصنيف «{name}»؟ لا يمكن حذف تصنيف مرتبط بأصل.", parent=self):
+            return
+        try:
+            self.store.delete_category(name)
+            self.parent.refresh()
+            self._reload()
+            messagebox.showinfo("تم الحذف", f"تم حذف التصنيف «{name}».", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر حذف التصنيف", str(exc), parent=self)
 
 
 if __name__ == "__main__":

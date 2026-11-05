@@ -61,6 +61,29 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(restored.all()[0]["name"], "أصل للاختبار")
             restored.close()
 
+    def test_category_catalog_persists_renames_assets_and_guards_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = AssetStore(Path(directory) / "aosol.db")
+            store.add_category("أجهزة طبية")
+            asset = sample()
+            asset.update(id="medical-1", code="AST-MED", category="أجهزة طبية")
+            store.save(asset)
+            with self.assertRaisesRegex(ValueError, "مرتبط"):
+                store.delete_category("أجهزة طبية")
+            self.assertEqual(store.rename_category("أجهزة طبية", "المعدات الطبية"), 1)
+            self.assertEqual(store.all()[0]["category"], "المعدات الطبية")
+            self.assertIn("المعدات الطبية", store.get_categories())
+            store.add_category("تصنيف غير مستخدم")
+            store.delete_category("تصنيف غير مستخدم")
+            backup = store.backup_data()
+            store.close()
+
+            restored = AssetStore(Path(directory) / "restored.db")
+            restored.restore(backup, replace=True)
+            self.assertIn("المعدات الطبية", restored.get_categories())
+            self.assertEqual(restored.all()[0]["category"], "المعدات الطبية")
+            restored.close()
+
     def test_csv_export_contains_unicode_headers_and_data(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "assets.csv"

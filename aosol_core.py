@@ -28,6 +28,28 @@ CATEGORIES = [
 ]
 
 
+def normalize_categories(values: Any) -> list[str]:
+    if not isinstance(values, (list, tuple)):
+        raise ValueError("قائمة التصنيفات غير صالحة.")
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        name = str(raw or "").strip()
+        if not name:
+            continue
+        if len(name) > 80:
+            raise ValueError("يجب ألا يتجاوز اسم التصنيف 80 حرفًا.")
+        if any(ord(char) < 32 for char in name) or name.lstrip().startswith(("=", "+", "-", "@")):
+            raise ValueError("اسم التصنيف يحتوي على صيغة أو أحرف غير مسموح بها.")
+        folded = name.casefold()
+        if folded not in seen:
+            result.append(name)
+            seen.add(folded)
+    if not result:
+        raise ValueError("يجب أن تحتوي قائمة التصنيفات على تصنيف واحد على الأقل.")
+    return result
+
+
 def safe_spreadsheet_text(value: Any) -> Any:
     """Prefix formula-like text so spreadsheet programs treat CSV values as text."""
     if isinstance(value, str):
@@ -200,6 +222,68 @@ class AssetStore:
         for key in ("commercial_reg", "tax_number"):
             if self.get_setting(key) is None:
                 self.set_setting(key, "")
+        if self.get_setting("categories") is None:
+            self.set_setting("categories", json.dumps(CATEGORIES, ensure_ascii=False))
+
+    def get_categories(self) -> list[str]:
+        raw = self.get_setting("categories")
+        if raw is None:
+            return list(CATEGORIES)
+        try:
+            return normalize_categories(json.loads(raw))
+        except (ValueError, json.JSONDecodeError):
+            return list(CATEGORIES)
+
+    def set_categories(self, categories: list[str]) -> list[str]:
+        normalized = normalize_categories(categories)
+        self.set_setting("categories", json.dumps(normalized, ensure_ascii=False))
+        return normalized
+
+    def add_category(self, name: str) -> list[str]:
+        clean_name = normalize_categories([name])[0]
+        categories = self.get_categories()
+        if any(item.casefold() == clean_name.casefold() for item in categories):
+            raise ValueError("هذا التصنيف موجود بالفعل.")
+        categories.append(clean_name)
+        return self.set_categories(categories)
+
+    def rename_category(self, old_name: str, new_name: str) -> int:
+        old = str(old_name or "").strip()
+        new = normalize_categories([new_name])[0]
+        categories = self.get_categories()
+        if old not in categories:
+            raise ValueError("التصنيف المراد تعديله غير موجود.")
+        if any(item.casefold() == new.casefold() and item != old for item in categories):
+            raise ValueError("يوجد تصنيف آخر بهذا الاسم.")
+        updated_categories = [new if item == old else item for item in categories]
+        affected = 0
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            rows = self.conn.execute("SELECT id, payload FROM assets").fetchall()
+            for row in rows:
+                payload = json.loads(row["payload"])
+                if payload.get("category") == old:
+                    payload["category"] = new
+                    payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+                    self.conn.execute("UPDATE assets SET payload=?, updated_at=? WHERE id=?", (json.dumps(payload, ensure_ascii=False), payload["updatedAt"], row["id"]))
+                    affected += 1
+            self.conn.execute("INSERT INTO settings(key,value) VALUES('categories',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(updated_categories, ensure_ascii=False),))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        return affected
+
+    def delete_category(self, name: str) -> list[str]:
+        categories = self.get_categories()
+        if name not in categories:
+            raise ValueError("التصنيف غير موجود.")
+        if len(categories) <= 1:
+            raise ValueError("يجب الإبقاء على تصنيف واحد على الأقل.")
+        used_by = [asset.get("code", "") for asset in self.all() if asset.get("category") == name]
+        if used_by:
+            raise ValueError(f"لا يمكن حذف هذا التصنيف لأنه مرتبط بـ {len(used_by)} أصل. غيّر تصنيف الأصول أولًا.")
+        return self.set_categories([item for item in categories if item != name])
 
     def close(self) -> None:
         self.conn.close()
@@ -253,13 +337,16 @@ class AssetStore:
         self.conn.commit()
 
     def backup_data(self) -> dict[str, Any]:
-        return {"app": APP_NAME, "version": "1.1", "exportDate": datetime.now().isoformat(timespec="seconds"), "settings": {"companyName": self.get_setting("company_name"), "currency": self.get_setting("currency"), "commercialReg": self.get_setting("commercial_reg"), "taxNumber": self.get_setting("tax_number")}, "assets": self.all()}
+        return {"app": APP_NAME, "version": "1.2", "exportDate": datetime.now().isoformat(timespec="seconds"), "settings": {"companyName": self.get_setting("company_name"), "currency": self.get_setting("currency"), "commercialReg": self.get_setting("commercial_reg"), "taxNumber": self.get_setting("tax_number")}, "categories": self.get_categories(), "assets": self.all()}
 
     def restore(self, data: dict[str, Any], replace: bool = False) -> int:
         assets = data.get("assets") if isinstance(data, dict) else None
         if not isinstance(assets, list):
             raise ValueError("ملف النسخة الاحتياطية غير صالح")
         settings = data.get("settings", {}) if isinstance(data.get("settings", {}), dict) else {}
+        backup_categories = data.get("categories") if isinstance(data.get("categories"), list) else None
+        if backup_categories is not None:
+            backup_categories = normalize_categories(backup_categories)
         imported = 0
         try:
             self.conn.execute("BEGIN IMMEDIATE")
@@ -284,6 +371,15 @@ class AssetStore:
             for key, value in (("company_name", settings.get("companyName")), ("currency", settings.get("currency")), ("commercial_reg", settings.get("commercialReg")), ("tax_number", settings.get("taxNumber"))):
                 if value:
                     self.conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+            restored_categories = list(backup_categories if replace and backup_categories is not None else self.get_categories())
+            known_categories = {category.casefold() for category in restored_categories}
+            for item in assets:
+                if isinstance(item, dict) and str(item.get("category") or "").strip():
+                    category = normalize_categories([item["category"]])[0]
+                    if category.casefold() not in known_categories:
+                        restored_categories.append(category)
+                        known_categories.add(category.casefold())
+            self.conn.execute("INSERT INTO settings(key,value) VALUES('categories',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(normalize_categories(restored_categories), ensure_ascii=False),))
             self.conn.commit()
         except Exception:
             self.conn.rollback()
