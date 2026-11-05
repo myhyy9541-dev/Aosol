@@ -44,6 +44,15 @@ python -m unittest discover -s tests -v
 
 تشمل الاختبارات حساب الإهلاك، وحركة التقارير والاستبعادات التاريخية، وإنشاء مصنفات Excel، والتحقق من قالب الاستيراد، والتراجع الذري عند تكرار رمز أصل، واستعادة إعدادات المنشأة.
 
+لاختبارات الويب وفحص TypeScript وبناء PWA:
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run build
+```
+
 ## مكان تخزين البيانات
 
 - Windows: `%APPDATA%\Aosol\aosol.db`
