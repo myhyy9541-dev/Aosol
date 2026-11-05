@@ -50,12 +50,12 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-white">تحميل برنامج الأصول والإهلاك للكمبيوتر (EXE)</h2>
+                <h2 className="text-base font-bold text-white">تحميل تطبيق Aosol المكتبي لويندوز</h2>
                 <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300 border border-emerald-500/30">
                   جاهز للتشغيل
                 </span>
               </div>
-              <p className="text-xs text-slate-400">ملف تنفيذي جاهز للتحميل والتشغيل على ويندوز مباشرة دون أي خبرة برمجية</p>
+              <p className="text-xs text-slate-400">تطبيق Python محلي لإدارة الأصول، يعمل دون اتصال بالإنترنت</p>
             </div>
           </div>
           <button
@@ -70,7 +70,7 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
         <div className="bg-sky-950/40 border-b border-sky-800/40 px-6 py-3 flex items-start gap-2.5 text-xs text-sky-200">
           <Info className="h-4 w-4 text-sky-400 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            تم تجهيز ملف التشغيل التنفيذي <strong>.EXE</strong> وحزمة النظام بالكامل. اختر أحد الخيارات أدناه واضغط على زر التحميل الأخضر لينزل الملف مباشرة إلى جهازك دون الحاجة لكتابة أي أوامر.
+            التطبيق المكتبي يحفظ قاعدة البيانات محليًا على Windows ولا يحتاج إلى تثبيت Python. اختر تنزيل EXE أو حزمة ZIP التي تتضمن البصمة وتعليمات التشغيل.
           </p>
         </div>
 
@@ -85,10 +85,10 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                    الخيار ١: تنزيل ملف البرنامج المباشر (FixedAssetsManager.exe)
+                    الخيار ١: تطبيق Aosol المكتبي (Aosol.exe)
                   </h3>
                   <p className="text-[11px] text-slate-300">
-                    مشغّل صغير (120 KB) يفتح Edge أو Chrome في نافذة تطبيق. إذا نُزّل منفردًا، يفتح الموقع المستضاف؛ ويستخدم الملفات المحلية فقط عند وجود index.html بجواره.
+                    البرنامج الفعلي لإدارة الأصول ببايثون، وليس مشغّلًا للمتصفح. تُحفظ البيانات محليًا في مجلد حساب Windows.
                   </p>
                 </div>
               </div>
@@ -103,17 +103,17 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
                 <span>طريقة الاستخدام السهلة (٣ خطوات فقط):</span>
               </div>
               <ol className="list-decimal list-inside space-y-1 text-slate-300 pr-1 leading-relaxed">
-                <li>اضغط على زر <strong>تحميل ملف FixedAssetsManager.exe</strong> الأخضر بالأسفل.</li>
+                <li>اضغط زر تحميل <strong>Aosol.exe</strong>.</li>
                 <li>افتح مجلد التنزيلات (Downloads) في جهاز الكمبيوتر الخاص بك.</li>
-                <li>انقر نقراً مزدوجاً (Double Click) على الملف، وسيفتح لك البرنامج فوراً كبرنامج مكتبي!</li>
+                <li>تحقق من بصمة SHA-256 إن أردت، ثم شغّل الملف. لا تتجاوز تحذير الحماية تلقائيًا.</li>
               </ol>
             </div>
 
             <button
-              onClick={() => triggerDownload('/FixedAssetsManager.exe', 'FixedAssetsManager.exe')}
+              onClick={() => triggerDownload('/Aosol.exe', 'Aosol.exe')}
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white px-5 py-3 text-xs font-bold transition shadow-lg shadow-emerald-950/50"
             >
-              {downloadStarted === 'FixedAssetsManager.exe' ? (
+              {downloadStarted === 'Aosol.exe' ? (
                 <>
                   <Check className="h-4 w-4 text-emerald-200" />
                   <span>تم بدء التنزيل بنجاح! تفقد مجلد التحميلات (Downloads)</span>
@@ -121,13 +121,13 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
               ) : (
                 <>
                   <Download className="h-4 w-4" />
-                  <span>تحميل ملف البرنامج الآن (FixedAssetsManager.exe)</span>
+                  <span>تحميل تطبيق Aosol الآن (Aosol.exe)</span>
                 </>
               )}
             </button>
           </div>
 
-          {/* Option 2: Full Offline ZIP */}
+          {/* Option 2: Standalone desktop app package */}
           <div className="rounded-2xl bg-slate-800/60 p-5 border border-slate-700/80 space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2.5">
@@ -136,27 +136,27 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                    الخيار ٢: حزمة ويندوز بملفات الويب المحلية (FixedAssets-Windows-Offline.zip)
+                    الخيار ٢: حزمة Aosol لويندوز (ZIP)
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    ملف مضغوط يضم المشغّل وملفات الويب المحلية. يعتمد التشغيل دون إنترنت على فك الحزمة كاملة وعمل الملفات المحلية في المتصفح.
+                    تضم ملف التطبيق وتعليمات التشغيل وملف بصمة SHA-256 للتحقق من تطابق التنزيل.
                   </p>
                 </div>
               </div>
               <span className="shrink-0 text-[10px] rounded bg-slate-800 text-slate-300 px-2 py-0.5 border border-slate-700">
-                ملفات محلية مرفقة
+                التطبيق المكتبي
               </span>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              فك ضغط الحزمة كاملة في مجلد واحد. يحاول المشغّل استخدام index.html المحلي؛ إذا لم يجده يفتح الموقع المستضاف، لذلك لا تفترض أن النسخة تعمل دون إنترنت قبل اختبارها على جهازك.
+              فك ضغط ZIP إلى مجلد، ثم استخدم Aosol.exe. تبقى قاعدة بياناتك في مجلد بيانات حساب Windows ولا تُحفظ داخل ZIP.
             </p>
 
             <button
-              onClick={() => triggerDownload('/FixedAssets-Windows-Offline.zip', 'FixedAssets-Windows-Offline.zip')}
+              onClick={() => triggerDownload('/Aosol-Windows-x64.zip', 'Aosol-Windows-x64.zip')}
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-[0.99] text-sky-300 border border-slate-600 px-5 py-2.5 text-xs font-bold transition shadow-sm"
             >
-              {downloadStarted === 'FixedAssets-Windows-Offline.zip' ? (
+              {downloadStarted === 'Aosol-Windows-x64.zip' ? (
                 <>
                   <Check className="h-4 w-4 text-emerald-400" />
                   <span>جاري تنزيل الحزمة المضغوطة...</span>
@@ -164,7 +164,7 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
               ) : (
                 <>
                   <Download className="h-4 w-4 text-sky-400" />
-                  <span>تنزيل حزمة ملفات الويب المرفقة (FixedAssets-Windows-Offline.zip)</span>
+                  <span>تنزيل حزمة Aosol (Aosol-Windows-x64.zip)</span>
                 </>
               )}
             </button>
@@ -207,10 +207,10 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
               </span>
             </div>
             <p className="text-[11px] text-slate-200 leading-relaxed">
-              لا يحمل <strong>FixedAssetsManager.exe</strong> توقيع ناشر Authenticode. لم يُجرَ عليه فحص مستقل بمضاد فيروسات Windows، لذلك لا يمكن ضمان خلوّه 100% أو عدم ظهور تحذير. يوضح مصدر المشغّل أنه يفتح متصفحًا إلى الموقع المستضاف عند غياب index.html المحلي. لا تتجاوز تحذير الحماية تلقائيًا.
+              ملف <strong>Aosol.exe</strong> غير موقّع بشهادة ناشر Authenticode، ولم يُجرَ عليه فحص مستقل بمضاد فيروسات Windows؛ لذلك قد يعرض SmartScreen أو مضاد الفيروسات تحذيرًا. لا يمكن ضمان خلوّه 100%، ولا تتجاوز تحذير الحماية تلقائيًا.
             </p>
             <div className="pt-2 border-t border-amber-800/40 text-[10px] text-slate-300 font-mono-numbers break-all">
-              SHA-256 للمشغّل المنشور: ad0ebfe40db9861c1b96e32c3d377e5cf24b34d4e7ea85dd15472efe3bed713c
+              SHA-256 لـ Aosol.exe: 06f01656012b924f0305cf8028e6fcbe36c6b2efb6a923af1fea44ef1d9203e5
             </div>
           </div>
         </div>

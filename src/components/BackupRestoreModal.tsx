@@ -189,15 +189,15 @@ export const BackupRestoreModal: React.FC<BackupRestoreModalProps> = ({
             <div className="space-y-1">
               <div className="font-bold text-white flex items-center gap-2">
                 <Download className="h-4 w-4 text-emerald-400" />
-                نسخة برنامج الكمبيوتر المكتبي المستقل (FixedAssetsManager.exe)
+                تطبيق Aosol المكتبي لويندوز (Aosol.exe)
               </div>
               <p className="text-[11px] text-slate-300">
-                ملف تنفيذي مخصص لويندوز (120 KB) جاهز للتشغيل مباشرة بنقرة مزدوجة دون أي خبرة تقنية.
+                تطبيق إدارة الأصول ببايثون، يعمل محليًا ويحفظ البيانات على جهازك. قد يعرض Windows تحذيرًا لأن الملف غير موقّع.
               </p>
             </div>
             <a
-              href="/FixedAssetsManager.exe"
-              download="FixedAssetsManager.exe"
+              href="/Aosol.exe"
+              download="Aosol.exe"
               className="shrink-0 flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 text-xs font-bold transition shadow-md"
             >
               <Download className="h-4 w-4" />
