@@ -8,7 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from aosol_core import CATEGORIES, METHODS, STATUSES, money, valuation
+from aosol_core import CATEGORIES, METHODS, STATUSES, money, safe_spreadsheet_text, valuation
 from aosol_reports import report_view
 
 NAVY = "13233A"
@@ -221,6 +221,8 @@ def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, 
     for row_idx, values in enumerate(rows, header_row + 1):
         for col, value in enumerate(values, 1):
             cell = sheet.cell(row_idx, col, value)
+            if isinstance(value, str):
+                cell.data_type = "s"
             cell.font = Font(name="Arial", size=9, color=INK)
             fill = WHITE if (row_idx - header_row) % 2 else "F3F7FA"
             if isinstance(value, (int, float)) and not isinstance(value, bool) and col in currency_columns:
@@ -243,6 +245,8 @@ def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, 
         row_idx = header_row + 1 + len(rows)
         for col, value in enumerate(total_row, 1):
             cell = sheet.cell(row_idx, col, value)
+            if isinstance(value, str):
+                cell.data_type = "s"
             cell.fill = PatternFill("solid", fgColor=PALE_TEAL)
             cell.font = Font(name="Arial", bold=True, color=NAVY)
             cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -606,7 +610,8 @@ def export_assets_workbook(path: str | Path, assets: list[dict[str, Any]], compa
         overview.cell(cat_start + 1, 3, "صافي القيمة").font = Font(name="Arial", bold=True, color=WHITE)
         overview.cell(cat_start + 1, 3).fill = PatternFill("solid", fgColor=NAVY_2)
         for i, group in enumerate(report["categories"][:8], cat_start + 2):
-            overview.cell(i, 2, group["group"])
+            group_cell = overview.cell(i, 2, group["group"])
+            group_cell.data_type = "s"
             overview.cell(i, 3, group["endingBookValue"])
             overview.cell(i, 3).number_format = '#,##0.00'
         chart = BarChart()
@@ -761,4 +766,4 @@ def export_report_csv(path: str | Path, report: dict[str, Any], kind: str) -> No
     with open(path, "w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.writer(stream)
         writer.writerow(headers)
-        writer.writerows(rows)
+        writer.writerows([[safe_spreadsheet_text(value) for value in row] for row in rows])

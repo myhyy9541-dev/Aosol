@@ -4,11 +4,9 @@ import {
   Monitor, 
   Download, 
   CheckCircle, 
-  ShieldCheck, 
   ExternalLink, 
   FolderArchive, 
   Play, 
-  Sparkles,
   Info,
   Check
 } from 'lucide-react';
@@ -90,7 +88,7 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
                     الخيار ١: تنزيل ملف البرنامج المباشر (FixedAssetsManager.exe)
                   </h3>
                   <p className="text-[11px] text-slate-300">
-                    ملف تشغيل مخصص لويندوز (حجمه 120 KB فقط) يفتح البرنامج فوراً في نافذة سطح مكتب مستقلة
+                    مشغّل صغير (120 KB) يفتح Edge أو Chrome في نافذة تطبيق. إذا نُزّل منفردًا، يفتح الموقع المستضاف؛ ويستخدم الملفات المحلية فقط عند وجود index.html بجواره.
                   </p>
                 </div>
               </div>
@@ -138,20 +136,20 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
-                    الخيار ٢: حزمة الويندوز الكاملة أوفلاين (FixedAssets-Windows-Offline.zip)
+                    الخيار ٢: حزمة ويندوز بملفات الويب المحلية (FixedAssets-Windows-Offline.zip)
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    ملف مضغوط يحتوي على ملف الـ EXE + ملفات النظام للعمل بدون إنترنت 100% (حجم 400 KB)
+                    ملف مضغوط يضم المشغّل وملفات الويب المحلية. يعتمد التشغيل دون إنترنت على فك الحزمة كاملة وعمل الملفات المحلية في المتصفح.
                   </p>
                 </div>
               </div>
               <span className="shrink-0 text-[10px] rounded bg-slate-800 text-slate-300 px-2 py-0.5 border border-slate-700">
-                للعمل بدون نت نهائياً
+                ملفات محلية مرفقة
               </span>
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              هذه الحزمة مخصصة إذا كنت تريد نقل البرنامج على فلاش ميموري (USB) أو تشغيله على أجهزة معزولة تماماً عن شبكة الإنترنت. فك الضغط وانقر على <strong>FixedAssetsManager.exe</strong> أو <strong>تشغيل_البرنامج_ويندوز.bat</strong>.
+              فك ضغط الحزمة كاملة في مجلد واحد. يحاول المشغّل استخدام index.html المحلي؛ إذا لم يجده يفتح الموقع المستضاف، لذلك لا تفترض أن النسخة تعمل دون إنترنت قبل اختبارها على جهازك.
             </p>
 
             <button
@@ -166,7 +164,7 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
               ) : (
                 <>
                   <Download className="h-4 w-4 text-sky-400" />
-                  <span>تنزيل حزمة الأوفلاين الشاملة (FixedAssets-Windows-Offline.zip)</span>
+                  <span>تنزيل حزمة ملفات الويب المرفقة (FixedAssets-Windows-Offline.zip)</span>
                 </>
               )}
             </button>
@@ -197,23 +195,22 @@ export const StandaloneExeModal: React.FC<StandaloneExeModalProps> = ({ isOpen, 
             </a>
           </div>
 
-          {/* Security & Antivirus Assurance */}
-          <div className="rounded-2xl bg-emerald-950/40 border border-emerald-600/40 p-4 space-y-2">
+          {/* Honest download security notice */}
+          <div className="rounded-2xl bg-amber-950/40 border border-amber-600/40 p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="flex items-center gap-2 text-xs font-bold text-emerald-300">
-                <ShieldCheck className="h-5 w-5 text-emerald-400" />
-                نتيجة الفحص الأمني (Clean & Virus-Free):
+              <span className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                <Info className="h-5 w-5 text-amber-400" />
+                ملاحظة التوقيع والفحص:
               </span>
-              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-300 border border-emerald-500/40">
-                سليم وآمن 100%
+              <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-300 border border-amber-500/40">
+                غير موقّع
               </span>
             </div>
-            <p className="text-[11px] text-slate-300 leading-relaxed">
-              تم فحص ملف <strong>FixedAssetsManager.exe</strong> والصفحات والحزمة البرمجية بالكامل: لا توجد أي فيروسات أو برمجيات تجسس أو ثغرات أمنية. البرنامج يعمل بدون إنترنت ولا يطلب أي صلاحيات إدارية خطرة.
+            <p className="text-[11px] text-slate-200 leading-relaxed">
+              لا يحمل <strong>FixedAssetsManager.exe</strong> توقيع ناشر Authenticode. لم يُجرَ عليه فحص مستقل بمضاد فيروسات Windows، لذلك لا يمكن ضمان خلوّه 100% أو عدم ظهور تحذير. يوضح مصدر المشغّل أنه يفتح متصفحًا إلى الموقع المستضاف عند غياب index.html المحلي. لا تتجاوز تحذير الحماية تلقائيًا.
             </p>
-            <div className="pt-2 border-t border-emerald-800/40 flex items-center justify-between text-[10px] text-slate-400 font-mono-numbers">
-              <span>SHA-256 (EXE): ad0ebfe40db9861c1b96...</span>
-              <span className="text-emerald-400 font-bold">Passed / Verified</span>
+            <div className="pt-2 border-t border-amber-800/40 text-[10px] text-slate-300 font-mono-numbers break-all">
+              SHA-256 للمشغّل المنشور: ad0ebfe40db9861c1b96e32c3d377e5cf24b34d4e7ea85dd15472efe3bed713c
             </div>
           </div>
         </div>

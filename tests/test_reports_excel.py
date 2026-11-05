@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import unittest
 from datetime import date
@@ -6,7 +7,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from aosol_core import AssetStore, valuation
-from aosol_excel import TEMPLATE_COLUMNS, export_assets_workbook, export_import_template, export_report_workbook, parse_import_file
+from aosol_excel import TEMPLATE_COLUMNS, export_assets_workbook, export_import_template, export_report_csv, export_report_workbook, parse_import_file
 from aosol_reports import build_asset_report, report_view
 
 
@@ -131,6 +132,33 @@ class ExcelImportExportTests(unittest.TestCase):
             self.assertTrue(all(period[s].sheet_view.rightToLeft for s in period.sheetnames))
             self.assertEqual(period["التفاصيل"].cell(6, 2).value, "أصل اختباري")
             self.assertTrue(period["الملخص التنفيذي"]._charts)
+
+    def test_formula_like_asset_text_is_plain_text_in_all_report_exports(self):
+        payload = '=HYPERLINK("https://example.invalid", "open")'
+        asset = sample(name=payload, category="@SUM(1,1)")
+        report = build_asset_report([asset], date(2025, 1, 1), date(2025, 12, 31))
+        with tempfile.TemporaryDirectory() as directory:
+            register_path = Path(directory) / "register.xlsx"
+            period_path = Path(directory) / "report.xlsx"
+            csv_path = Path(directory) / "report.csv"
+            export_assets_workbook(register_path, [asset], "شركة الاختبار", "ريال يمني")
+            export_report_workbook(period_path, report, "شركة الاختبار", "ريال يمني")
+            export_report_csv(csv_path, report, "حركة الأصول للفترة")
+
+            register = load_workbook(register_path, data_only=False)
+            details = register["سجل الأصول"]
+            self.assertEqual(details["B6"].value, payload)
+            self.assertEqual(details["B6"].data_type, "s")
+            self.assertEqual(details["C6"].data_type, "s")
+            self.assertEqual(register["نظرة عامة"]["B20"].value, "@SUM(1,1)")
+            self.assertEqual(register["نظرة عامة"]["B20"].data_type, "s")
+
+            period = load_workbook(period_path, data_only=False)
+            self.assertEqual(period["التفاصيل"]["B6"].value, payload)
+            self.assertEqual(period["التفاصيل"]["B6"].data_type, "s")
+            with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+                rows = list(csv.reader(stream))
+            self.assertEqual(rows[1][1], "'" + payload)
 
     def test_save_many_rolls_back_every_asset_on_duplicate_code(self):
         with tempfile.TemporaryDirectory() as directory:

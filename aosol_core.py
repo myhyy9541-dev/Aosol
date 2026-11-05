@@ -26,6 +26,15 @@ CATEGORIES = [
 ]
 
 
+def safe_spreadsheet_text(value: Any) -> Any:
+    """Prefix formula-like text so spreadsheet programs treat CSV values as text."""
+    if isinstance(value, str):
+        first = value.lstrip(" \t\r\n\x00\ufeff")
+        if first.startswith(("=", "+", "-", "@")):
+            return "'" + value
+    return value
+
+
 def data_directory() -> Path:
     if sys.platform == "win32":
         root = Path(os.environ.get("APPDATA", Path.home()))
@@ -306,7 +315,7 @@ def export_csv(path: str | Path, assets: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(file, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for asset in assets:
-            writer.writerow(asset)
+            writer.writerow({field: safe_spreadsheet_text(asset.get(field)) for field in fields})
 
 
 def export_xlsx(path: str | Path, assets: list[dict[str, Any]], currency: str) -> None:
@@ -322,6 +331,9 @@ def export_xlsx(path: str | Path, assets: list[dict[str, Any]], currency: str) -
     for asset in assets:
         val = valuation(asset)
         sheet.append([asset.get("code"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), val["totalCost"], val["accumulatedDepreciation"], val["netBookValue"], money(asset.get("salvageValue")), asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), ""), asset.get("department"), asset.get("location"), asset.get("custodian"), STATUSES.get(asset.get("status"), "نشط")])
+        for cell in sheet[sheet.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
     for cell in sheet[1]:

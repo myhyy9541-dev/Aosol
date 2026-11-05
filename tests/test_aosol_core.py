@@ -70,6 +70,17 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(rows[0]["code"], "AST-TEST")
             self.assertEqual(rows[0]["name"], "أصل للاختبار")
 
+    def test_csv_export_neutralizes_formula_like_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "assets.csv"
+            asset = sample()
+            asset.update(name='=HYPERLINK("https://example.invalid", "open")', location="\t@SUM(1,1)")
+            export_csv(path, [asset])
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual(row["name"], '\'=HYPERLINK("https://example.invalid", "open")')
+            self.assertEqual(row["location"], "'\t@SUM(1,1)")
+
     def test_excel_export_contains_asset_and_rtl_sheet(self):
         from openpyxl import load_workbook
         with tempfile.TemporaryDirectory() as directory:
@@ -81,6 +92,20 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(sheet.cell(2, 2).value, "أصل للاختبار")
             self.assertGreaterEqual(sheet.cell(2, 8).value, 2000)
             self.assertLessEqual(sheet.cell(2, 8).value, 10000)
+
+    def test_excel_export_stores_formula_like_text_as_plain_text(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "assets.xlsx"
+            payload = "=HYPERLINK(\"https://example.invalid\", \"open\")"
+            asset = sample()
+            asset.update(name=payload, location="@SUM(1,1)")
+            export_xlsx(path, [asset], "ريال يمني")
+            sheet = load_workbook(path, data_only=False).active
+            self.assertEqual(sheet.cell(2, 2).value, payload)
+            self.assertEqual(sheet.cell(2, 2).data_type, "s")
+            self.assertEqual(sheet.cell(2, 13).value, "@SUM(1,1)")
+            self.assertEqual(sheet.cell(2, 13).data_type, "s")
 
 
 if __name__ == "__main__":
