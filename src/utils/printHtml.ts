@@ -39,6 +39,16 @@ function formatNumber(num: number): string {
   }).format(num || 0);
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[character] || character));
+}
+
+function safeCssWidth(width?: string): string {
+  return width && /^\d+(?:\.\d+)?(?:px|%|mm|cm|rem)?$/.test(width) ? width : '';
+}
+
 export function generatePrintableHTMLString(config: PrintableReportConfig): string {
   const {
     title,
@@ -64,7 +74,7 @@ export function generatePrintableHTMLString(config: PrintableReportConfig): stri
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} - ${companyName}</title>
+  <title>${escapeHtml(title)} - ${escapeHtml(companyName)}</title>
   <style>
     @page {
       size: A4 ${orientation};
@@ -404,23 +414,23 @@ export function generatePrintableHTMLString(config: PrintableReportConfig): stri
     <!-- Official Corporate Financial Header -->
     <div class="official-header">
       <div class="company-block">
-        <h1>${companyName}</h1>
+        <h1>${escapeHtml(companyName)}</h1>
         <div class="sub">الإدارة المالية العامة — قسم حسابات وإهلاك الأصول الثابتة</div>
-        <div class="legal-meta">العملة الرسمية المعتمدة: <strong>${currency}</strong> | الجمهورية اليمنية</div>
+        <div class="legal-meta">العملة الرسمية المعتمدة: <strong>${escapeHtml(currency)}</strong> | الجمهورية اليمنية</div>
       </div>
       <div class="meta-block">
         <div><span class="doc-ref">${refCode}</span></div>
-        ${fromDate && toDate ? `<div>الفترة المالية: <strong>من ${fromDate} إلى ${toDate}</strong></div>` : ''}
+        ${fromDate && toDate ? `<div>الفترة المالية: <strong>من ${escapeHtml(fromDate)} إلى ${escapeHtml(toDate)}</strong></div>` : ''}
         <div>تاريخ استخراج التقرير: <strong>${currentDate}</strong></div>
       </div>
     </div>
 
     <!-- Report Main Title Banner -->
     <div class="title-banner">
-      <h2 class="report-main-title">${title}</h2>
+        <h2 class="report-main-title">${escapeHtml(title)}</h2>
       <div class="badge-bar">
         <span class="badge-item">إجمالي عدد الأصول: <strong>${rows.length} أصل</strong></span>
-        ${metaBadges.map(b => `<span class="separator">•</span><span class="badge-item">${b}</span>`).join('')}
+            ${metaBadges.map(b => `<span class="separator">•</span><span class="badge-item">${escapeHtml(b)}</span>`).join('')}
       </div>
     </div>
 
@@ -433,15 +443,15 @@ export function generatePrintableHTMLString(config: PrintableReportConfig): stri
         </div>
         <div class="kpi-card">
           <div class="kpi-label">إجمالي التكلفة الرأسمالية (التاريخية)</div>
-          <div class="kpi-value">${formatNumber(kpiSummary.totalCost)} ${currency}</div>
+          <div class="kpi-value">${formatNumber(kpiSummary.totalCost)} ${escapeHtml(currency)}</div>
         </div>
         <div class="kpi-card amber-kpi">
           <div class="kpi-label">مصروف إهلاك الفترة المحددة</div>
-          <div class="kpi-value">${formatNumber(kpiSummary.periodExpense)} ${currency}</div>
+          <div class="kpi-value">${formatNumber(kpiSummary.periodExpense)} ${escapeHtml(currency)}</div>
         </div>
         <div class="kpi-card emerald-kpi">
           <div class="kpi-label">صافي القيمة الدفترية نهاية الفترة</div>
-          <div class="kpi-value">${formatNumber(kpiSummary.endingNBV)} ${currency}</div>
+          <div class="kpi-value">${formatNumber(kpiSummary.endingNBV)} ${escapeHtml(currency)}</div>
         </div>
       </div>
     ` : ''}
@@ -452,8 +462,8 @@ export function generatePrintableHTMLString(config: PrintableReportConfig): stri
         <tr>
           <th class="align-center" style="width: 28px;">#</th>
           ${columns.map(c => `
-            <th class="align-${c.align || 'right'}" style="${c.width ? `width: ${c.width};` : ''}">
-              ${c.label}
+            <th class="align-${c.align || 'right'}" style="${safeCssWidth(c.width) ? `width: ${safeCssWidth(c.width)};` : ''}">
+              ${escapeHtml(c.label)}
             </th>
           `).join('')}
         </tr>
@@ -467,7 +477,7 @@ export function generatePrintableHTMLString(config: PrintableReportConfig): stri
               if (cell.isBold) cls += ' bold';
               if (cell.highlight === 'amber') cls += ' highlight-amber';
               if (cell.highlight === 'emerald') cls += ' highlight-emerald';
-              return `<td class="${cls}">${cell.text}</td>`;
+              return `<td class="${cls}">${escapeHtml(cell.text)}</td>`;
             }).join('')}
           </tr>
         `).join('')}
@@ -478,7 +488,8 @@ export function generatePrintableHTMLString(config: PrintableReportConfig): stri
             ${totals.map(t => {
               let cls = `align-${t.align || 'left'}`;
               if (t.isBold) cls += ' bold';
-              return `<td class="${cls}" ${t.colSpan ? `colspan="${t.colSpan}"` : ''}>${t.text}</td>`;
+              const safeColSpan = Number.isInteger(t.colSpan) && Number(t.colSpan) > 0 && Number(t.colSpan) <= 100 ? Number(t.colSpan) : undefined;
+              return `<td class="${cls}" ${safeColSpan ? `colspan="${safeColSpan}"` : ''}>${escapeHtml(t.text)}</td>`;
             }).join('')}
           </tr>
         </tfoot>
@@ -601,4 +612,3 @@ export function downloadPrintableHTMLReport(config: PrintableReportConfig): void
     URL.revokeObjectURL(url);
   }, 1500);
 }
-

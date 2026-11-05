@@ -10,8 +10,12 @@ from typing import Any, Callable
 
 from aosol_core import (
     APP_NAME, CATEGORIES, METHODS, STATUSES, AssetStore, demo_assets,
-    depreciation_schedule, export_csv, export_xlsx, money, valuation,
+    depreciation_schedule, export_csv, money, valuation,
 )
+from aosol_excel import DISPOSAL_TYPES, export_assets_workbook, export_import_template, parse_import_file
+from import_ui import ImportPreviewDialog
+from reports_ui import ReportsDialog
+from ui_components import ScrollableFrame
 
 NAVY = "#12213a"
 NAVY_DARK = "#0d1829"
@@ -32,15 +36,23 @@ class AosolApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Aosol | إدارة الأصول الثابتة")
-        self.geometry("1360x840")
-        self.minsize(1080, 680)
+        screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
+        width, height = min(1360, max(900, screen_width - 40)), min(840, max(500, screen_height - 72))
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(width, 900), min(height, 560))
         self.configure(bg=BG)
         self.store = AssetStore()
         self.assets: list[dict[str, Any]] = []
         self.currency = self.store.get_setting("currency") or "ريال يمني"
         self.company = self.store.get_setting("company_name") or "شركة سبأ للتجارة والاستثمار المحدودة"
+        self.commercial_reg = self.store.get_setting("commercial_reg") or ""
+        self.tax_number = self.store.get_setting("tax_number") or ""
         self.search_var = tk.StringVar()
         self.status_var = tk.StringVar(value="الكل")
+        self.category_filter_var = tk.StringVar(value="الكل")
+        self.method_filter_var = tk.StringVar(value="الكل")
+        self.department_filter_var = tk.StringVar(value="الكل")
+        self._sort_reverse: dict[str, bool] = {}
         self._setup_style()
         self._build_layout()
         self.refresh()
@@ -72,6 +84,7 @@ class AosolApp(tk.Tk):
         header_actions = tk.Frame(header, bg=NAVY)
         header_actions.pack(side="left", padx=24, pady=21)
         self._button(header_actions, "نسخة احتياطية", self.backup, kind="ghost").pack(side="left", padx=5)
+        self._button(header_actions, "قالب Excel", self.export_template, kind="ghost").pack(side="left", padx=5)
         self._button(header_actions, "تصدير Excel", self.export_excel, kind="ghost").pack(side="left", padx=5)
         self._button(header_actions, "+ إضافة أصل", self.add_asset, kind="primary").pack(side="left", padx=5)
 
@@ -79,13 +92,15 @@ class AosolApp(tk.Tk):
         nav.pack(fill="x")
         nav.pack_propagate(False)
         for label, callback, selected in [
-            ("لوحة الأصول", self.focus_assets, True), ("التقارير والإهلاك", self.report, False),
+            ("لوحة الأصول", self.focus_assets, True), ("التقارير والإهلاك", self.open_reports, False),
             ("النسخ والاستعادة", self.backup, False), ("الإعدادات", self.settings, False),
         ]:
             color = TEAL if selected else MUTED
             tk.Button(nav, text=label, command=callback, bg=WHITE, fg=color, activebackground="#f4f8fb", activeforeground=TEAL, font=("Tahoma", 10, "bold" if selected else "normal"), relief="flat", padx=18, pady=12, cursor="hand2", bd=0).pack(side="right", padx=4)
-        self.content = tk.Frame(self, bg=BG)
-        self.content.pack(fill="both", expand=True, padx=28, pady=(20, 14))
+        self._button(nav, "تعديل الأصل", self.edit_asset).pack(side="left", padx=10, pady=5)
+        self.content_scroll = ScrollableFrame(self, background=BG)
+        self.content_scroll.pack(fill="both", expand=True, padx=28, pady=(20, 14))
+        self.content = self.content_scroll.content
         footer = tk.Frame(self, bg=NAVY_DARK, height=32)
         footer.pack(fill="x", side="bottom")
         footer.pack_propagate(False)
@@ -140,36 +155,48 @@ class AosolApp(tk.Tk):
         tk.Label(title_row, text="إدارة البيانات المالية ومتابعة الإهلاك", bg=WHITE, fg=MUTED, font=("Tahoma", 9), anchor="e").pack(side="right", padx=14)
         controls = tk.Frame(panel, bg=WHITE)
         controls.pack(fill="x", padx=18, pady=(0, 12))
+        departments = sorted({str(a.get("department", "")).strip() for a in self.assets if str(a.get("department", "")).strip()})
+        self.status_combo = ttk.Combobox(controls, textvariable=self.status_var, state="readonly", values=["الكل", *STATUSES.values()], width=14, justify="right")
+        self.status_combo.pack(side="left", padx=(0, 7))
+        self.status_combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
+        self.category_combo = ttk.Combobox(controls, textvariable=self.category_filter_var, state="readonly", values=["الكل", *CATEGORIES], width=22, justify="right")
+        self.category_combo.pack(side="left", padx=(0, 7))
+        self.category_combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
+        self.method_combo = ttk.Combobox(controls, textvariable=self.method_filter_var, state="readonly", values=["الكل", *METHODS.values()], width=22, justify="right")
+        self.method_combo.pack(side="left", padx=(0, 7))
+        self.method_combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
+        self.department_combo = ttk.Combobox(controls, textvariable=self.department_filter_var, state="readonly", values=["الكل", *departments], width=16, justify="right")
+        self.department_combo.pack(side="left", padx=(0, 7))
+        self.department_combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
         search = tk.Entry(controls, textvariable=self.search_var, font=("Tahoma", 10), justify="right", relief="flat", bg="#f5f7fa", fg=INK, insertbackground=INK, highlightthickness=1, highlightbackground=BORDER, highlightcolor=TEAL)
         search.pack(side="right", fill="x", expand=True, ipady=9, padx=(10, 0))
         search.insert(0, "")
         search.bind("<KeyRelease>", lambda _e: self.populate())
-        tk.Label(controls, text="بحث بالاسم أو الكود", bg=WHITE, fg=MUTED, font=("Tahoma", 9)).pack(side="right", padx=(0, 10))
-        combo = ttk.Combobox(controls, textvariable=self.status_var, state="readonly", values=["الكل", *STATUSES.values()], width=17, justify="right")
-        combo.pack(side="left", padx=(0, 8))
-        combo.bind("<<ComboboxSelected>>", lambda _e: self.populate())
-        tk.Label(controls, text="الحالة", bg=WHITE, fg=MUTED, font=("Tahoma", 9)).pack(side="left", padx=(0, 8))
+        tk.Label(controls, text="بحث بالاسم أو الكود أو الموقع أو الرقم التسلسلي", bg=WHITE, fg=MUTED, font=("Tahoma", 8)).pack(side="right", padx=(0, 10))
 
         table_wrap = tk.Frame(panel, bg=WHITE)
         table_wrap.pack(fill="both", expand=True, padx=18, pady=(0, 12))
-        cols = ("code", "name", "category", "cost", "book", "method", "status")
+        cols = ("code", "name", "category", "department", "service", "cost", "accum", "book", "method", "status")
         self.tree = ttk.Treeview(table_wrap, columns=cols, show="headings", selectmode="browse")
-        headings = [("code", "رمز الأصل", 120), ("name", "اسم الأصل", 250), ("category", "التصنيف", 180), ("cost", "التكلفة الإجمالية", 135), ("book", "صافي القيمة الدفترية", 145), ("method", "طريقة الإهلاك", 160), ("status", "الحالة", 100)]
+        headings = [("code", "رمز الأصل", 110), ("name", "اسم الأصل", 220), ("category", "التصنيف", 160), ("department", "الإدارة", 150), ("service", "تاريخ التشغيل", 110), ("cost", "التكلفة الإجمالية", 130), ("accum", "مجمع الإهلاك", 130), ("book", "صافي القيمة الدفترية", 145), ("method", "طريقة الإهلاك", 155), ("status", "الحالة", 100)]
         for col, label, width in headings:
-            self.tree.heading(col, text=label, anchor="e")
-            self.tree.column(col, width=width, anchor="e", stretch=(col == "name"))
+            self.tree.heading(col, text=label, anchor="e", command=lambda current=col: self._sort_by(current))
+            self.tree.column(col, width=width, anchor="e", stretch=(col in ("name", "department")))
         self.tree.tag_configure("odd", background="#f8fafc")
         self.tree.tag_configure("disposed", foreground="#98a2b3")
         scrollbar = ttk.Scrollbar(table_wrap, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        hscrollbar = ttk.Scrollbar(table_wrap, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=hscrollbar.set)
         self.tree.pack(side="right", fill="both", expand=True)
         scrollbar.pack(side="left", fill="y")
+        hscrollbar.pack(side="bottom", fill="x")
         self.tree.bind("<Double-1>", lambda _e: self.edit_asset())
         self.tree.bind("<Return>", lambda _e: self.edit_asset())
 
         actions = tk.Frame(panel, bg="#f8fafc")
         actions.pack(fill="x", padx=18, pady=(0, 16))
         self._button(actions, "تعديل الأصل", self.edit_asset).pack(side="right", padx=(0, 8), pady=9)
+        self._button(actions, "مركز التقارير", self.open_reports).pack(side="right", padx=8, pady=9)
         self._button(actions, "جدول الإهلاك", self.report).pack(side="right", padx=8, pady=9)
         self._button(actions, "استبعاد / بيع", self.dispose_asset).pack(side="right", padx=8, pady=9)
         self._button(actions, "استيراد", self.import_file).pack(side="left", padx=8, pady=9)
@@ -184,15 +211,54 @@ class AosolApp(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         query = self.search_var.get().strip().casefold()
         selected_status = self.status_var.get()
+        selected_category = self.category_filter_var.get()
+        selected_method = self.method_filter_var.get()
+        selected_department = self.department_filter_var.get()
         for index, asset in enumerate(self.assets):
-            if query and query not in str(asset.get("name", "")).casefold() and query not in str(asset.get("code", "")).casefold():
-                continue
-            if selected_status != "الكل" and STATUSES.get(asset.get("status", "active"), "نشط") != selected_status:
+            search_values = (asset.get("name"), asset.get("code"), asset.get("location"), asset.get("department"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"))
+            if query and not any(query in str(value or "").casefold() for value in search_values):
                 continue
             val = valuation(asset)
-            tags = ("disposed",) if asset.get("status") == "disposed" else (("odd",) if index % 2 else ())
-            values = (asset.get("code", ""), asset.get("name", ""), asset.get("category", ""), fmt(val["totalCost"]), fmt(val["netBookValue"]), METHODS.get(asset.get("depreciationMethod"), ""), STATUSES.get(asset.get("status", "active"), "نشط"))
+            state = asset.get("status", "active")
+            if state not in ("disposed", "under_maintenance", "idle") and val["netBookValue"] <= money(asset.get("salvageValue")) + 0.01:
+                state = "fully_depreciated"
+            if selected_status != "الكل" and STATUSES.get(state, "نشط") != selected_status:
+                continue
+            if selected_category != "الكل" and asset.get("category", "") != selected_category:
+                continue
+            if selected_method != "الكل" and METHODS.get(asset.get("depreciationMethod"), "") != selected_method:
+                continue
+            if selected_department != "الكل" and asset.get("department", "") != selected_department:
+                continue
+            tags = ("disposed",) if state == "disposed" else (("odd",) if index % 2 else ())
+            values = (asset.get("code", ""), asset.get("name", ""), asset.get("category", ""), asset.get("department", ""), asset.get("inServiceDate", ""), fmt(val["totalCost"]), fmt(val["accumulatedDepreciation"]), fmt(val["netBookValue"]), METHODS.get(asset.get("depreciationMethod"), ""), STATUSES.get(state, "نشط"))
             self.tree.insert("", "end", iid=asset["id"], values=values, tags=tags)
+
+    def _sort_by(self, column: str) -> None:
+        if not hasattr(self, "tree"):
+            return
+        reverse = self._sort_reverse.get(column, False)
+        children = list(self.tree.get_children(""))
+        def sort_key(item: str) -> Any:
+            value = self.tree.set(item, column)
+            if column in ("cost", "accum", "book"):
+                try:
+                    return float(value.replace(",", ""))
+                except ValueError:
+                    return 0.0
+            if column == "service":
+                try:
+                    return date.fromisoformat(value[:10])
+                except ValueError:
+                    return date.min
+            return str(value).casefold()
+        for index, item in enumerate(sorted(children, key=sort_key, reverse=reverse)):
+            self.tree.move(item, "", index)
+        self._sort_reverse[column] = not reverse
+
+    def visible_assets(self) -> list[dict[str, Any]]:
+        visible_ids = set(self.tree.get_children()) if hasattr(self, "tree") else set()
+        return [asset for asset in self.assets if asset.get("id") in visible_ids]
 
     def selected_asset(self) -> dict[str, Any] | None:
         selected = self.tree.selection() if hasattr(self, "tree") else ()
@@ -204,6 +270,9 @@ class AosolApp(tk.Tk):
     def focus_assets(self) -> None:
         self.search_var.set("")
         self.status_var.set("الكل")
+        self.category_filter_var.set("الكل")
+        self.method_filter_var.set("الكل")
+        self.department_filter_var.set("الكل")
         self.refresh()
 
     def add_asset(self) -> None:
@@ -245,33 +314,57 @@ class AosolApp(tk.Tk):
         dialog = tk.Toplevel(self)
         dialog.title("تسجيل استبعاد الأصل")
         dialog.configure(bg=WHITE)
-        dialog.geometry("440x340")
+        screen_height = dialog.winfo_screenheight()
+        dialog.geometry(f"560x{min(650, max(500, screen_height - 100))}")
+        dialog.minsize(480, 500)
         dialog.transient(self)
         dialog.grab_set()
-        tk.Label(dialog, text="تسجيل بيع أو استبعاد الأصل", bg=WHITE, fg=NAVY, font=("Tahoma", 14, "bold")).pack(anchor="e", padx=22, pady=(20, 14))
-        tk.Label(dialog, text=f"القيمة الدفترية الحالية: {fmt(val['netBookValue'])} {self.currency}", bg=WHITE, fg=MUTED, font=("Tahoma", 10)).pack(anchor="e", padx=22, pady=5)
+        form_scroll = ScrollableFrame(dialog, background=WHITE)
+        form_scroll.pack(fill="both", expand=True, padx=12, pady=(12, 4))
+        form = form_scroll.content
+        tk.Label(form, text="تسجيل بيع أو استبعاد الأصل", bg=WHITE, fg=NAVY, font=("Tahoma", 14, "bold")).pack(anchor="e", padx=22, pady=(12, 10))
+        tk.Label(form, text=f"القيمة الدفترية الحالية: {fmt(val['netBookValue'])} {self.currency}", bg=WHITE, fg=MUTED, font=("Tahoma", 10)).pack(anchor="e", padx=22, pady=5)
         price_var, cost_var, date_var = tk.StringVar(value="0"), tk.StringVar(value="0"), tk.StringVar(value=date.today().isoformat())
-        fields = [("تاريخ الاستبعاد (YYYY-MM-DD)", date_var), ("متحصلات البيع", price_var), ("تكاليف الاستبعاد", cost_var)]
+        buyer_var, reason_var = tk.StringVar(), tk.StringVar()
+        type_labels = {label: code for code, label in DISPOSAL_TYPES.items()}
+        type_var = tk.StringVar(value=DISPOSAL_TYPES["sale"])
+        type_row = tk.Frame(form, bg=WHITE)
+        type_row.pack(fill="x", padx=22, pady=7)
+        tk.Label(type_row, text="نوع الاستبعاد", bg=WHITE, fg=INK, font=("Tahoma", 9), width=24, anchor="e").pack(side="right")
+        type_combo = ttk.Combobox(type_row, textvariable=type_var, values=list(type_labels), state="readonly", justify="right", font=("Tahoma", 10))
+        type_combo.pack(side="left", fill="x", expand=True, ipady=4)
+        fields = [("تاريخ الاستبعاد (YYYY-MM-DD)", date_var), ("متحصلات / قيمة الاسترداد", price_var), ("تكاليف الاستبعاد", cost_var), ("المشتري / الجهة المستلمة", buyer_var), ("سبب الاستبعاد", reason_var)]
         for label, var in fields:
-            row = tk.Frame(dialog, bg=WHITE)
+            row = tk.Frame(form, bg=WHITE)
             row.pack(fill="x", padx=22, pady=7)
             tk.Label(row, text=label, bg=WHITE, fg=INK, font=("Tahoma", 9), width=24, anchor="e").pack(side="right")
             tk.Entry(row, textvariable=var, justify="right", font=("Tahoma", 10), relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=5)
         def confirm() -> None:
             try:
-                disposal_date = date.fromisoformat(date_var.get()).isoformat()
-                price, costs = money(price_var.get()), money(cost_var.get())
+                disposal_day = date.fromisoformat(date_var.get())
+                purchase_day = date.fromisoformat(str(asset.get("purchaseDate", disposal_day.isoformat()))[:10])
+                if disposal_day < purchase_day:
+                    raise ValueError("تاريخ الاستبعاد يسبق تاريخ الشراء.")
+                disposal_date = disposal_day.isoformat()
+                price, costs = money(price_var.get().replace(",", "")), money(cost_var.get().replace(",", ""))
             except Exception:
                 messagebox.showerror("بيانات غير صحيحة", "تحقق من التاريخ والمبالغ.", parent=dialog)
                 return
-            gain_loss = price - costs - val["netBookValue"]
+            disposal_value = valuation(asset, disposal_day)
+            gain_loss = price - costs - disposal_value["netBookValue"]
             asset["status"] = "disposed"
-            asset["disposal"] = {"disposalDate": disposal_date, "salePrice": price, "disposalCosts": costs, "bookValueAtDisposal": val["netBookValue"], "accumulatedAtDisposal": val["accumulatedDepreciation"], "gainLoss": gain_loss, "disposalType": "sale"}
+            asset["disposal"] = {"disposalDate": disposal_date, "salePrice": price, "disposalCosts": costs, "bookValueAtDisposal": disposal_value["netBookValue"], "accumulatedAtDisposal": disposal_value["accumulatedDepreciation"], "gainLoss": gain_loss, "disposalType": type_labels.get(type_var.get(), "sale"), "buyerName": buyer_var.get().strip(), "reason": reason_var.get().strip()}
             self.store.save(asset)
             dialog.destroy()
             self.refresh()
             messagebox.showinfo("تم الاستبعاد", f"الربح / (الخسارة): {fmt(gain_loss)} {self.currency}", parent=self)
-        self._button(dialog, "تأكيد الاستبعاد", confirm, kind="primary").pack(side="left", padx=22, pady=18)
+        self._button(dialog, "تأكيد الاستبعاد", confirm, kind="primary").pack(side="left", padx=22, pady=12)
+
+    def open_reports(self) -> None:
+        if not self.assets:
+            messagebox.showinfo("التقارير", "لا توجد أصول لعرضها بعد.", parent=self)
+            return
+        ReportsDialog(self, self.assets, self.company, self.currency)
 
     def report(self) -> None:
         asset = self.selected_asset() if hasattr(self, "tree") and self.tree.selection() else None
@@ -299,28 +392,55 @@ class AosolApp(tk.Tk):
         for col, label, width in [("period", "الفترة", 170), ("beginning", "القيمة أول المدة", 150), ("expense", "مصروف الإهلاك", 150), ("accumulated", "مجمع الإهلاك", 150), ("ending", "القيمة آخر المدة", 160)]:
             tree.heading(col, text=label, anchor="e")
             tree.column(col, width=width, anchor="e")
+        vs = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        hs = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vs.set, xscrollcommand=hs.set)
         for row in schedule:
             tree.insert("", "end", values=(row["period"], fmt(float(row["beginning"])), fmt(float(row["expense"])), fmt(float(row["accumulated"])), fmt(float(row["ending"]))))
-        tree.pack(fill="both", expand=True)
+        tree.pack(side="top", fill="both", expand=True)
+        vs.pack(side="right", fill="y")
+        hs.pack(side="bottom", fill="x")
         self._button(dialog, "إغلاق", dialog.destroy).pack(side="left", padx=18, pady=(0, 16))
 
     def export_excel(self) -> None:
         if not self.assets:
             messagebox.showinfo("التصدير", "لا توجد بيانات لتصديرها.", parent=self)
             return
+        filtered_assets = self.visible_assets()
+        export_filtered = messagebox.askyesnocancel(
+            "نطاق التصدير",
+            f"نعم: تصدير النتائج الظاهرة بعد البحث والمرشحات ({len(filtered_assets)} أصل).\nلا: تصدير جميع الأصول ({len(self.assets)} أصل).",
+            parent=self,
+        )
+        if export_filtered is None:
+            return
+        assets_to_export = filtered_assets if export_filtered else self.assets
+        if not assets_to_export:
+            messagebox.showinfo("التصدير", "لا توجد أصول ظاهرة بعد تطبيق المرشحات.", parent=self)
+            return
         path = filedialog.asksaveasfilename(parent=self, title="تصدير سجل الأصول", defaultextension=".xlsx", initialfile=f"سجل_الأصول_{date.today().isoformat()}.xlsx", filetypes=[("Excel", "*.xlsx"), ("CSV", "*.csv")])
         if not path:
             return
         try:
             if Path(path).suffix.lower() == ".csv":
-                export_csv(path, self.assets)
+                export_csv(path, assets_to_export)
             else:
-                export_xlsx(path, self.assets, self.currency)
+                export_assets_workbook(path, assets_to_export, self.company, self.currency)
             messagebox.showinfo("تم التصدير", f"تم حفظ سجل الأصول بنجاح:\n{path}", parent=self)
         except ImportError:
             messagebox.showerror("مكتبة ناقصة", "مكتبة openpyxl غير مثبّتة. أعد تثبيت التطبيق أو استخدم CSV.", parent=self)
         except Exception as exc:
             messagebox.showerror("تعذر التصدير", str(exc), parent=self)
+
+    def export_template(self) -> None:
+        path = filedialog.asksaveasfilename(parent=self, title="حفظ قالب استيراد الأصول", defaultextension=".xlsx", initialfile="قالب_استيراد_أصول_Aosol.xlsx", filetypes=[("Excel Workbook", "*.xlsx")])
+        if not path:
+            return
+        try:
+            export_import_template(path)
+            messagebox.showinfo("تم إنشاء القالب", f"املأ ورقة «قالب الأصول» ثم اختر استيراد من التطبيق.\n\n{path}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر إنشاء القالب", str(exc), parent=self)
 
     def backup(self) -> None:
         choice = messagebox.askyesnocancel("النسخ الاحتياطي", "هل تريد إنشاء نسخة احتياطية؟\n\nنعم: حفظ نسخة JSON\nلا: استعادة نسخة من ملف JSON", parent=self)
@@ -342,13 +462,15 @@ class AosolApp(tk.Tk):
                 count = self.store.restore(data, replace=replace)
                 self.currency = self.store.get_setting("currency") or self.currency
                 self.company = self.store.get_setting("company_name") or self.company
+                self.commercial_reg = self.store.get_setting("commercial_reg") or ""
+                self.tax_number = self.store.get_setting("tax_number") or ""
                 self.refresh()
                 messagebox.showinfo("اكتملت الاستعادة", f"تم استيراد {count} أصل.", parent=self)
             except Exception as exc:
                 messagebox.showerror("تعذر الاستعادة", str(exc), parent=self)
 
     def import_file(self) -> None:
-        path = filedialog.askopenfilename(parent=self, title="استيراد الأصول", filetypes=[("ملفات البيانات", "*.json *.xlsx *.csv"), ("JSON", "*.json"), ("Excel", "*.xlsx"), ("CSV", "*.csv")])
+        path = filedialog.askopenfilename(parent=self, title="استيراد الأصول من قالب Aosol أو CSV", filetypes=[("ملفات البيانات", "*.json *.xlsx *.xlsm *.csv"), ("Excel", "*.xlsx *.xlsm"), ("CSV", "*.csv"), ("نسخة احتياطية", "*.json")])
         if not path:
             return
         try:
@@ -356,70 +478,65 @@ class AosolApp(tk.Tk):
             if suffix == ".json":
                 data = json.loads(Path(path).read_text(encoding="utf-8"))
                 count = self.store.restore(data, replace=False)
-            elif suffix == ".csv":
-                import csv
-                with open(path, newline="", encoding="utf-8-sig") as stream:
-                    imported = list(csv.DictReader(stream))
-                count = self._import_rows(imported)
-            else:
-                from openpyxl import load_workbook
-                sheet = load_workbook(path, data_only=True, read_only=True).active
-                rows = list(sheet.iter_rows(values_only=True))
-                headers = [str(x or "").strip() for x in rows[0]] if rows else []
-                imported = [dict(zip(headers, row)) for row in rows[1:]]
-                count = self._import_rows(imported)
-            self.refresh()
-            messagebox.showinfo("اكتمل الاستيراد", f"تم استيراد {count} أصل.", parent=self)
+                self.refresh()
+                messagebox.showinfo("اكتملت الاستعادة", f"تم استيراد {count} أصل من النسخة الاحتياطية.", parent=self)
+                return
+            existing_codes = {str(asset.get("code", "")).strip() for asset in self.assets}
+            batch = parse_import_file(path, existing_codes)
+            if batch["rowsScanned"] == 0:
+                messagebox.showinfo("لا توجد صفوف", "لم أجد بيانات أصول تحت صف العناوين. املأ ورقة «قالب الأصول» ثم أعد المحاولة.", parent=self)
+                return
+            ImportPreviewDialog(self, batch, self._commit_import)
         except Exception as exc:
             messagebox.showerror("تعذر الاستيراد", f"تحقق من تنسيق الملف.\n{exc}", parent=self)
 
-    def _import_rows(self, rows: list[dict[str, Any]]) -> int:
-        aliases = {"رمز الأصل": "code", "الكود": "code", "اسم الأصل": "name", "الفئة": "category", "تاريخ الشراء": "purchaseDate", "تاريخ التشغيل": "inServiceDate", "التكلفة": "purchaseCost", "التكلفة الإجمالية": "purchaseCost", "قيمة الخردة": "salvageValue", "القيمة التخريدية": "salvageValue", "العمر": "usefulLifeYears", "العمر (سنة)": "usefulLifeYears", "طريقة الإهلاك": "depreciationMethod", "الإدارة": "department", "الموقع": "location", "العهدة": "custodian"}
-        count = 0
-        existing = {a.get("code") for a in self.assets}
-        for row in rows:
-            item = {aliases.get(str(k), str(k)): v for k, v in row.items() if k is not None}
-            if not item.get("code") or not item.get("name") or str(item["code"]) in existing:
-                continue
-            item.setdefault("id", __import__("uuid").uuid4().hex)
-            item.setdefault("purchaseDate", date.today().isoformat())
-            item.setdefault("inServiceDate", item["purchaseDate"])
-            item.setdefault("additionalCosts", 0)
-            item.setdefault("salvageValue", 0)
-            item.setdefault("usefulLifeYears", 5)
-            item.setdefault("depreciationMethod", "straight_line")
-            item.setdefault("startDepreciationRule", "mid_month_15")
-            item.setdefault("status", "active")
-            item.setdefault("category", CATEGORIES[0])
-            item.setdefault("createdAt", datetime.now().isoformat())
-            for key in ("purchaseCost", "additionalCosts", "salvageValue", "usefulLifeYears"):
-                item[key] = money(item.get(key))
-            method_label = str(item.get("depreciationMethod", ""))
-            item["depreciationMethod"] = next((code for code, label in METHODS.items() if label == method_label), method_label if method_label in METHODS else "straight_line")
-            self.store.save(item)
-            existing.add(str(item["code"]))
-            count += 1
-        return count
+    def _commit_import(self, assets: list[dict[str, Any]]) -> None:
+        try:
+            self.store.save_many(assets)
+            self.refresh()
+            messagebox.showinfo("اكتمل الاستيراد", f"تمت إضافة {len(assets)} أصل إلى قاعدة البيانات المحلية.", parent=self)
+        except sqlite3.IntegrityError as exc:
+            messagebox.showerror("تعذر إتمام الاستيراد", f"لم يُحفظ أي أصل لأن رمزًا مكررًا ظهر أثناء العملية.\n{exc}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر إتمام الاستيراد", f"لم يُحفظ أي أصل؛ تراجعت العملية لحماية قاعدة البيانات.\n{exc}", parent=self)
 
     def settings(self) -> None:
         dialog = tk.Toplevel(self)
         dialog.title("إعدادات المنشأة")
-        dialog.geometry("510x320")
+        screen_width, screen_height = dialog.winfo_screenwidth(), dialog.winfo_screenheight()
+        width, height = min(620, max(500, screen_width - 40)), min(540, max(440, screen_height - 80))
+        dialog.geometry(f"{width}x{height}")
+        dialog.minsize(min(width, 500), min(height, 440))
         dialog.configure(bg=WHITE)
         dialog.transient(self)
         dialog.grab_set()
-        tk.Label(dialog, text="إعدادات المنشأة والتقارير", bg=WHITE, fg=NAVY, font=("Tahoma", 15, "bold")).pack(anchor="e", padx=24, pady=(22, 16))
+        form_scroll = ScrollableFrame(dialog, background=WHITE)
+        form_scroll.pack(fill="both", expand=True, padx=14, pady=(12, 4))
+        form = form_scroll.content
+        tk.Label(form, text="إعدادات المنشأة والتقارير", bg=WHITE, fg=NAVY, font=("Tahoma", 15, "bold")).pack(anchor="e", padx=20, pady=(12, 16))
         company_var = tk.StringVar(value=self.company)
+        reg_var = tk.StringVar(value=self.commercial_reg)
+        tax_var = tk.StringVar(value=self.tax_number)
         currency_var = tk.StringVar(value=self.currency)
-        for label, var in [("اسم المنشأة", company_var), ("العملة", currency_var)]:
-            row = tk.Frame(dialog, bg=WHITE)
-            row.pack(fill="x", padx=24, pady=9)
-            tk.Label(row, text=label, bg=WHITE, fg=INK, font=("Tahoma", 10), width=15, anchor="e").pack(side="right")
+        fields = [("اسم المنشأة", company_var), ("السجل التجاري", reg_var), ("الرقم الضريبي", tax_var)]
+        for label, var in fields:
+            row = tk.Frame(form, bg=WHITE)
+            row.pack(fill="x", padx=20, pady=9)
+            tk.Label(row, text=label, bg=WHITE, fg=INK, font=("Tahoma", 10), width=17, anchor="e").pack(side="right")
             tk.Entry(row, textvariable=var, justify="right", font=("Tahoma", 10), relief="solid", bd=1).pack(side="left", fill="x", expand=True, ipady=6)
+        currency_row = tk.Frame(form, bg=WHITE)
+        currency_row.pack(fill="x", padx=20, pady=9)
+        tk.Label(currency_row, text="العملة", bg=WHITE, fg=INK, font=("Tahoma", 10), width=17, anchor="e").pack(side="right")
+        currencies = ["ريال يمني", "ريال سعودي", "دولار أمريكي", "درهم إماراتي", "جنيه مصري", "دينار كويتي", "ريال قطري", "ريال عماني"]
+        ttk.Combobox(currency_row, textvariable=currency_var, values=currencies, justify="right", font=("Tahoma", 10)).pack(side="left", fill="x", expand=True, ipady=5)
         def save() -> None:
             self.company = company_var.get().strip() or self.company
+            self.commercial_reg = reg_var.get().strip()
+            self.tax_number = tax_var.get().strip()
             self.currency = currency_var.get().strip() or self.currency
             self.store.set_setting("company_name", self.company)
+            self.store.set_setting("commercial_reg", self.commercial_reg)
+            self.store.set_setting("tax_number", self.tax_number)
             self.store.set_setting("currency", self.currency)
             dialog.destroy()
             self.refresh()
@@ -444,8 +561,11 @@ class AssetDialog(tk.Toplevel):
         super().__init__(parent)
         self.parent, self.original, self.on_save, self.currency = parent, asset, on_save, currency
         self.title("تعديل بيانات الأصل" if asset else "إضافة أصل جديد")
-        self.geometry("900x770")
-        self.minsize(780, 650)
+        screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
+        width = min(900, max(680, screen_width - 48))
+        height = min(770, max(520, screen_height - 96))
+        self.geometry(f"{width}x{height}")
+        self.minsize(min(width, 680), min(height, 520))
         self.configure(bg=BG)
         self.transient(parent)
         self.grab_set()
@@ -454,9 +574,11 @@ class AssetDialog(tk.Toplevel):
         tk.Label(header, text="تعديل بيانات الأصل" if asset else "إضافة أصل ثابت جديد", bg=NAVY, fg=WHITE, font=("Tahoma", 15, "bold"), anchor="e").pack(fill="x", padx=24, pady=(16, 4))
         tk.Label(header, text="أدخل بيانات الأصل المالية والتشغيلية لحساب قيمته وإهلاكه تلقائيًا.", bg=NAVY, fg="#bdcadd", font=("Tahoma", 9), anchor="e").pack(fill="x", padx=24, pady=(0, 15))
         body = tk.Frame(self, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
-        body.pack(fill="both", expand=True, padx=18, pady=16)
-        form = tk.Frame(body, bg=WHITE)
-        form.pack(fill="both", expand=True, padx=18, pady=14)
+        body.pack(fill="both", expand=True, padx=18, pady=(12, 8))
+        form_scroll = ScrollableFrame(body, background=WHITE)
+        form_scroll.pack(fill="both", expand=True, padx=6, pady=6)
+        form = form_scroll.content
+        form.configure(padx=18, pady=14)
         defaults: dict[str, Any] = asset or {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "name": "", "category": CATEGORIES[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
         self.vars: dict[str, tk.Variable] = {}
         fields = [
@@ -492,7 +614,7 @@ class AssetDialog(tk.Toplevel):
             form.columnconfigure(0, weight=1)
             form.columnconfigure(1, weight=1)
         notes_cell = tk.Frame(form, bg=WHITE)
-        notes_cell.grid(row=10, column=0, columnspan=2, sticky="ew", padx=9, pady=7)
+        notes_cell.grid(row=(len(fields) + 1) // 2, column=0, columnspan=2, sticky="ew", padx=9, pady=7)
         tk.Label(notes_cell, text="ملاحظات", bg=WHITE, fg=INK, font=("Tahoma", 9, "bold"), anchor="e").pack(fill="x", pady=(0, 4))
         self.notes = tk.Text(notes_cell, height=3, wrap="word", font=("Tahoma", 9), relief="solid", bd=1, bg="#fbfcfe")
         self.notes.pack(fill="x")
@@ -500,7 +622,7 @@ class AssetDialog(tk.Toplevel):
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill="x", padx=18, pady=(0, 16))
         tk.Label(footer, text="* الحقول الإلزامية   •   التواريخ بصيغة YYYY-MM-DD", bg=BG, fg=MUTED, font=("Tahoma", 9)).pack(side="right", pady=10)
-        parent._button(footer, "حفظ الأصل", self.submit, kind="primary").pack(side="left", padx=6)
+        parent._button(footer, "حفظ التعديلات" if asset else "حفظ الأصل", self.submit, kind="primary").pack(side="left", padx=6)
         parent._button(footer, "إلغاء", self.destroy).pack(side="left", padx=6)
         self.bind("<Escape>", lambda _e: self.destroy())
 

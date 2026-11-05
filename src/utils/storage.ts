@@ -314,7 +314,8 @@ export function getStoredAssets(): Asset[] {
       return INITIAL_SAMPLE_ASSETS;
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_SAMPLE_ASSETS;
+    // An empty array is a valid cleared register, not a signal to restore demos.
+    return Array.isArray(parsed) ? parsed : INITIAL_SAMPLE_ASSETS;
   } catch (e) {
     console.error('Failed to load assets from localStorage:', e);
     return INITIAL_SAMPLE_ASSETS;

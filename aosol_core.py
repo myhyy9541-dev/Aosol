@@ -135,7 +135,12 @@ def valuation(asset: dict[str, Any], as_of: date | None = None) -> dict[str, flo
     salvage = min(money(asset.get("salvageValue")), cost)
     if asset.get("status") == "disposed" and asset.get("disposal"):
         d = asset["disposal"]
-        return {"totalCost": cost, "accumulatedDepreciation": money(d.get("accumulatedAtDisposal")), "netBookValue": money(d.get("bookValueAtDisposal")), "currentYearExpense": 0.0}
+        try:
+            disposal_date = date.fromisoformat(str(d.get("disposalDate", ""))[:10])
+        except ValueError:
+            disposal_date = as_of
+        if as_of >= disposal_date:
+            return {"totalCost": cost, "accumulatedDepreciation": money(d.get("accumulatedAtDisposal")), "netBookValue": money(d.get("bookValueAtDisposal")), "currentYearExpense": 0.0}
     if asset.get("depreciationMethod") == "units_of_production" and asset.get("producedUnitsToDate") is not None:
         total_units = max(1.0, money(asset.get("totalEstimatedUnits")) or 10000.0)
         accumulated = min(cost - salvage, money(asset.get("producedUnitsToDate")) * (cost - salvage) / total_units)
@@ -150,16 +155,27 @@ def valuation(asset: dict[str, Any], as_of: date | None = None) -> dict[str, flo
     start = effective_start(asset)
     if as_of < start:
         return {"totalCost": cost, "accumulatedDepreciation": 0.0, "netBookValue": cost, "currentYearExpense": 0.0}
-    months = (as_of.year - start.year) * 12 + as_of.month - start.month + 1
-    years_elapsed = max(0.0, months / 12.0)
     schedule = depreciation_schedule(asset)
-    full = int(years_elapsed)
-    fraction = years_elapsed - full
-    accumulated = sum(float(r["expense"]) for r in schedule[:min(full, len(schedule))])
+    accumulated = 0.0
     current_expense = 0.0
-    if full < len(schedule):
-        current_expense = float(schedule[full]["expense"])
-        accumulated += current_expense * fraction
+    for index, row in enumerate(schedule):
+        year = start.year + index
+        period_start = start if index == 0 else date(year, 1, 1)
+        if as_of < period_start:
+            break
+        period_months = 12 - period_start.month + 1
+        if as_of.year > year or (as_of.year == year and as_of.month == 12):
+            fraction = 1.0
+        elif as_of.year == year:
+            elapsed_months = max(0, as_of.month - period_start.month + 1)
+            fraction = min(1.0, elapsed_months / period_months)
+        else:
+            fraction = 0.0
+        expense = float(row["expense"])
+        accumulated += expense * fraction
+        if as_of.year == year:
+            current_expense = expense
+            break
     accumulated = min(max(0.0, accumulated), max(0.0, cost - salvage))
     return {"totalCost": cost, "accumulatedDepreciation": accumulated, "netBookValue": max(salvage, cost - accumulated), "currentYearExpense": current_expense}
 
@@ -178,6 +194,9 @@ class AssetStore:
             self.set_setting("company_name", "شركة سبأ للتجارة والاستثمار المحدودة")
         if self.get_setting("currency") is None:
             self.set_setting("currency", "ريال يمني")
+        for key in ("commercial_reg", "tax_number"):
+            if self.get_setting(key) is None:
+                self.set_setting(key, "")
 
     def close(self) -> None:
         self.conn.close()
@@ -197,6 +216,27 @@ class AssetStore:
         self.conn.execute("INSERT INTO assets(id,code,name,payload,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET code=excluded.code,name=excluded.name,payload=excluded.payload,updated_at=excluded.updated_at", (payload["id"], code, name, json.dumps(payload, ensure_ascii=False), payload["updatedAt"]))
         self.conn.commit()
 
+    def save_many(self, assets: list[dict[str, Any]]) -> None:
+        """Save a batch atomically; a single duplicate code rolls back the batch."""
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            for asset in assets:
+                payload = dict(asset)
+                payload.setdefault("id", str(uuid.uuid4()))
+                payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+                payload["code"] = str(payload.get("code", "")).strip()
+                payload["name"] = str(payload.get("name", "")).strip()
+                if not payload["code"] or not payload["name"]:
+                    raise ValueError("رمز الأصل واسمه مطلوبان")
+                self.conn.execute(
+                    "INSERT INTO assets(id,code,name,payload,updated_at) VALUES(?,?,?,?,?)",
+                    (payload["id"], payload["code"], payload["name"], json.dumps(payload, ensure_ascii=False), payload["updatedAt"]),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def delete(self, asset_id: str) -> None:
         self.conn.execute("DELETE FROM assets WHERE id=?", (asset_id,))
         self.conn.commit()
@@ -210,28 +250,41 @@ class AssetStore:
         self.conn.commit()
 
     def backup_data(self) -> dict[str, Any]:
-        return {"app": APP_NAME, "version": "1.0", "exportDate": datetime.now().isoformat(timespec="seconds"), "settings": {"companyName": self.get_setting("company_name"), "currency": self.get_setting("currency")}, "assets": self.all()}
+        return {"app": APP_NAME, "version": "1.1", "exportDate": datetime.now().isoformat(timespec="seconds"), "settings": {"companyName": self.get_setting("company_name"), "currency": self.get_setting("currency"), "commercialReg": self.get_setting("commercial_reg"), "taxNumber": self.get_setting("tax_number")}, "assets": self.all()}
 
     def restore(self, data: dict[str, Any], replace: bool = False) -> int:
         assets = data.get("assets") if isinstance(data, dict) else None
         if not isinstance(assets, list):
             raise ValueError("ملف النسخة الاحتياطية غير صالح")
-        if replace:
-            self.conn.execute("DELETE FROM assets")
+        settings = data.get("settings", {}) if isinstance(data.get("settings", {}), dict) else {}
         imported = 0
-        for item in assets:
-            if not isinstance(item, dict) or not item.get("code") or not item.get("name"):
-                continue
-            existing = self.conn.execute("SELECT id FROM assets WHERE code=?", (str(item["code"]),)).fetchone()
-            if existing and not replace:
-                continue
-            self.save(item)
-            imported += 1
-        settings = data.get("settings", {})
-        if settings.get("companyName"):
-            self.set_setting("company_name", str(settings["companyName"]))
-        if settings.get("currency"):
-            self.set_setting("currency", str(settings["currency"]))
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            if replace:
+                self.conn.execute("DELETE FROM assets")
+            for item in assets:
+                if not isinstance(item, dict) or not item.get("code") or not item.get("name"):
+                    continue
+                code = str(item["code"]).strip()
+                existing = self.conn.execute("SELECT id FROM assets WHERE code=?", (code,)).fetchone()
+                if existing and not replace:
+                    continue
+                payload = dict(item)
+                payload.setdefault("id", str(uuid.uuid4()))
+                payload["code"], payload["name"] = code, str(payload["name"]).strip()
+                payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+                self.conn.execute(
+                    "INSERT INTO assets(id,code,name,payload,updated_at) VALUES(?,?,?,?,?)",
+                    (payload["id"], code, payload["name"], json.dumps(payload, ensure_ascii=False), payload["updatedAt"]),
+                )
+                imported += 1
+            for key, value in (("company_name", settings.get("companyName")), ("currency", settings.get("currency")), ("commercial_reg", settings.get("commercialReg")), ("tax_number", settings.get("taxNumber"))):
+                if value:
+                    self.conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return imported
 
 

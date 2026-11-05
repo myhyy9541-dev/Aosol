@@ -236,8 +236,10 @@ export function getCurrentAssetValuation(asset: Asset, asOfDate: Date = new Date
   const salvageValue = Math.min(Number(asset.salvageValue) || 0, totalCost);
   const depreciableBase = Math.max(0, totalCost - salvageValue);
 
-  // If already disposed
-  if (asset.status === 'disposed' && asset.disposal) {
+  // Apply the disposal snapshot only on/after its effective date. Historical
+  // reports before disposal must continue to value the asset as active.
+  const disposalDate = asset.disposal?.disposalDate ? new Date(`${asset.disposal.disposalDate.slice(0, 10)}T00:00:00`) : null;
+  if (asset.status === 'disposed' && asset.disposal && disposalDate && !isNaN(disposalDate.getTime()) && asOfDate >= disposalDate) {
     const bookVal = asset.disposal.bookValueAtDisposal;
     const acc = asset.disposal.accumulatedAtDisposal;
     return {
@@ -295,11 +297,6 @@ export function getCurrentAssetValuation(asset: Asset, asOfDate: Date = new Date
     };
   }
 
-  // Calculate elapsed months from effective depreciation start
-  const monthsDiff = (asOfDate.getFullYear() - effectiveStart.getFullYear()) * 12 + (asOfDate.getMonth() - effectiveStart.getMonth());
-  const elapsedYears = Math.max(0, monthsDiff / 12);
-  const totalLifeYears = Math.max(1, Number(asset.usefulLifeYears) || 1);
-
   const schedule = calculateSchedule(asset);
   if (schedule.length === 0) {
     return {
@@ -312,27 +309,23 @@ export function getCurrentAssetValuation(asset: Asset, asOfDate: Date = new Date
     };
   }
 
-  // Find where we are in the schedule
-  const fullYearsPassed = Math.floor(elapsedYears);
-  const currentFraction = elapsedYears - fullYearsPassed;
-
   let accumulated = 0;
   let currentYearExpense = 0;
-
-  if (fullYearsPassed >= schedule.length) {
-    const lastRow = schedule[schedule.length - 1];
-    accumulated = lastRow.accumulatedDepreciation;
-    currentYearExpense = 0;
-  } else {
-    // Sum previous full years
-    for (let i = 0; i < fullYearsPassed; i++) {
-      accumulated += schedule[i].depreciationExpense;
-    }
-    // Add fraction of current year
-    const thisYearRow = schedule[fullYearsPassed];
-    if (thisYearRow) {
-      currentYearExpense = thisYearRow.depreciationExpense;
-      accumulated += thisYearRow.depreciationExpense * currentFraction;
+  const startMonth = effectiveStart.getMonth();
+  for (let i = 0; i < schedule.length; i++) {
+    const periodYear = effectiveStart.getFullYear() + i;
+    const periodStartMonth = i === 0 ? startMonth : 0;
+    const periodMonths = 12 - periodStartMonth;
+    if (asOfDate.getFullYear() < periodYear || (asOfDate.getFullYear() === periodYear && asOfDate.getMonth() < periodStartMonth)) break;
+    const elapsedMonths = asOfDate.getFullYear() > periodYear
+      ? periodMonths
+      : Math.min(periodMonths, asOfDate.getMonth() - periodStartMonth + 1);
+    const fraction = Math.max(0, elapsedMonths / periodMonths);
+    const rowExpense = schedule[i].depreciationExpense;
+    accumulated += rowExpense * fraction;
+    if (asOfDate.getFullYear() === periodYear) {
+      currentYearExpense = rowExpense;
+      break;
     }
   }
 
@@ -387,7 +380,7 @@ export interface PeriodDepreciationResult {
   periodExpense: number;
   accumulatedAtEnd: number;
   endingBookValue: number;
-  statusInPeriod: 'active' | 'acquired_in_period' | 'disposed_in_period' | 'fully_depreciated' | 'not_yet_in_service';
+  statusInPeriod: 'active' | 'acquired_in_period' | 'disposed_in_period' | 'disposed_before_period' | 'fully_depreciated' | 'not_yet_in_service';
   depreciationRatePercent: number;
 }
 
@@ -448,20 +441,16 @@ export function calculatePeriodDepreciation(
         periodExpense: 0,
         accumulatedAtEnd: asset.disposal.accumulatedAtDisposal,
         endingBookValue: 0,
-        statusInPeriod: 'disposed_in_period',
+        statusInPeriod: 'disposed_before_period',
         depreciationRatePercent: 0,
       };
     }
   }
 
-  // Calculate valuation at start of period
-  let valStart: { netBookValue: number; accumulatedDepreciation: number };
-  if (inService >= fromDate) {
-    // Acquired/placed in service inside this period
-    valStart = { netBookValue: totalCost, accumulatedDepreciation: 0 };
-  } else {
-    valStart = getCurrentAssetValuation(asset, fromDate);
-  }
+  // Opening balance is measured the day before the requested period begins.
+  const dayBeforePeriod = new Date(fromDate);
+  dayBeforePeriod.setDate(dayBeforePeriod.getDate() - 1);
+  const valStart = getCurrentAssetValuation(asset, dayBeforePeriod);
 
   // Calculate valuation at end of period
   let valEnd: { netBookValue: number; accumulatedDepreciation: number; isFullyDepreciated: boolean };
@@ -482,7 +471,8 @@ export function calculatePeriodDepreciation(
 
   const periodExpense = Math.max(0, valEnd.accumulatedDepreciation - valStart.accumulatedDepreciation);
   const beginningBookValue = valStart.netBookValue;
-  const endingBookValue = Math.max(salvageValue, beginningBookValue - periodExpense);
+  const isDisposedInPeriod = asset.status === 'disposed' && !!asset.disposal && new Date(asset.disposal.disposalDate) >= fromDate && new Date(asset.disposal.disposalDate) <= toDate;
+  const endingBookValue = isDisposedInPeriod ? 0 : Math.max(salvageValue, beginningBookValue - periodExpense);
 
   let statusInPeriod: PeriodDepreciationResult['statusInPeriod'] = 'active';
   if (inService >= fromDate && inService <= toDate) {
@@ -518,4 +508,3 @@ export function calculatePeriodDepreciation(
     depreciationRatePercent: annualRate,
   };
 }
-
