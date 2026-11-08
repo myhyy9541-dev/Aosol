@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from aosol_config import configured_data_directory
+from aosol_documents import (
+    MAX_ATTACHMENT_BYTES, attachment_files_for_backup, attachment_path,
+    cleanup_unreferenced_files, decode_backup_attachment_files,
+    safe_original_name, safe_staging_directory, stage_attachment_sources,
+    validate_attachment_records,
+)
 
 APP_NAME = "Aosol"
 METHODS = {
@@ -334,8 +340,54 @@ class AssetStore:
         if not code or not name:
             raise ValueError("رمز الأصل واسمه مطلوبان")
         payload["code"], payload["name"] = code, name
+        payload["attachments"] = validate_attachment_records(payload.get("attachments", []))
+        previous_row = self.conn.execute("SELECT payload FROM assets WHERE id=?", (payload["id"],)).fetchone()
+        previous = json.loads(previous_row[0]) if previous_row else None
         self.conn.execute("INSERT INTO assets(id,code,name,payload,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET code=excluded.code,name=excluded.name,payload=excluded.payload,updated_at=excluded.updated_at", (payload["id"], code, name, json.dumps(payload, ensure_ascii=False), payload["updatedAt"]))
         self.conn.commit()
+        if previous:
+            cleanup_unreferenced_files(self.path.parent, previous.get("attachments", []), self.all())
+
+    def save_with_attachments(self, asset: dict[str, Any], sources: list[str | Path]) -> None:
+        """Commit an asset and its newly selected files together, rolling back both on error."""
+        payload = dict(asset)
+        payload.setdefault("id", str(uuid.uuid4()))
+        payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
+        payload["code"] = str(payload.get("code", "")).strip()
+        payload["name"] = str(payload.get("name", "")).strip()
+        if not payload["code"] or not payload["name"]:
+            raise ValueError("رمز الأصل واسمه مطلوبان")
+        previous_row = self.conn.execute("SELECT payload FROM assets WHERE id=?", (payload["id"],)).fetchone()
+        previous = json.loads(previous_row[0]) if previous_row else None
+        existing = validate_attachment_records(payload.get("attachments", []))
+        if len(existing) + len(sources) > 2:
+            raise ValueError("يمكن إرفاق ملفين كحد أقصى لكل أصل.")
+        new_records, staged = stage_attachment_sources(self.path.parent, sources)
+        payload["attachments"] = existing + new_records
+        created: list[Path] = []
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute(
+                "INSERT INTO assets(id,code,name,payload,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET code=excluded.code,name=excluded.name,payload=excluded.payload,updated_at=excluded.updated_at",
+                (payload["id"], payload["code"], payload["name"], json.dumps(payload, ensure_ascii=False), payload["updatedAt"]),
+            )
+            for stage, final in staged:
+                final.parent.mkdir(parents=True, exist_ok=True)
+                if final.exists():
+                    raise FileExistsError("تعارض غير متوقع في اسم المرفق.")
+                os.replace(stage, final)
+                created.append(final)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            for path in created:
+                path.unlink(missing_ok=True)
+            raise
+        finally:
+            for stage, _final in staged:
+                stage.unlink(missing_ok=True)
+        if previous:
+            cleanup_unreferenced_files(self.path.parent, previous.get("attachments", []), self.all())
 
     def save_many(self, assets: list[dict[str, Any]]) -> None:
         """Save a batch atomically; a single duplicate code rolls back the batch."""
@@ -359,8 +411,12 @@ class AssetStore:
             raise
 
     def delete(self, asset_id: str) -> None:
+        row = self.conn.execute("SELECT payload FROM assets WHERE id=?", (asset_id,)).fetchone()
+        previous = json.loads(row[0]) if row else None
         self.conn.execute("DELETE FROM assets WHERE id=?", (asset_id,))
         self.conn.commit()
+        if previous:
+            cleanup_unreferenced_files(self.path.parent, previous.get("attachments", []), self.all())
 
     def get_setting(self, key: str) -> str | None:
         row = self.conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -371,7 +427,22 @@ class AssetStore:
         self.conn.commit()
 
     def backup_data(self) -> dict[str, Any]:
-        return {"app": APP_NAME, "version": "1.2", "exportDate": datetime.now().isoformat(timespec="seconds"), "settings": {"companyName": self.get_setting("company_name"), "currency": self.get_setting("currency"), "commercialReg": self.get_setting("commercial_reg"), "taxNumber": self.get_setting("tax_number")}, "categories": self.get_categories(), "assets": self.all()}
+        assets = self.all()
+        return {
+            "app": APP_NAME,
+            "version": "1.3",
+            "exportDate": datetime.now().isoformat(timespec="seconds"),
+            "settings": {
+                "companyName": self.get_setting("company_name"),
+                "currency": self.get_setting("currency"),
+                "commercialReg": self.get_setting("commercial_reg"),
+                "taxNumber": self.get_setting("tax_number"),
+                "reportTemplates": self.get_setting("report_templates"),
+            },
+            "categories": self.get_categories(),
+            "assets": assets,
+            "attachmentFiles": attachment_files_for_backup(self.path.parent, assets),
+        }
 
     def restore(self, data: dict[str, Any], replace: bool = False) -> int:
         assets = data.get("assets") if isinstance(data, dict) else None
@@ -381,7 +452,25 @@ class AssetStore:
         backup_categories = data.get("categories") if isinstance(data.get("categories"), list) else None
         if backup_categories is not None:
             backup_categories = normalize_categories(backup_categories)
+        referenced_paths = {
+            record["path"]
+            for item in assets if isinstance(item, dict)
+            for record in validate_attachment_records(item.get("attachments", []))
+        }
+        files = decode_backup_attachment_files(data.get("attachmentFiles"), referenced_paths)
+        for item in assets:
+            if not isinstance(item, dict):
+                continue
+            for record in validate_attachment_records(item.get("attachments", [])):
+                if record["path"] not in files:
+                    raise ValueError("النسخة تشير إلى مرفق غير موجود ضمن محتوى النسخة الاحتياطية.")
+                if Path(record["path"]).suffix.lower() != Path(record["name"]).suffix.lower():
+                    raise ValueError("امتداد اسم المرفق لا يطابق ملف النسخة الاحتياطية.")
         imported = 0
+        previous_assets = self.all()
+        staged: list[tuple[Path, Path]] = []
+        created: list[Path] = []
+        path_map: dict[str, str] = {}
         try:
             self.conn.execute("BEGIN IMMEDIATE")
             if replace:
@@ -394,6 +483,19 @@ class AssetStore:
                 if existing and not replace:
                     continue
                 payload = dict(item)
+                rewritten = []
+                for record in validate_attachment_records(payload.get("attachments", [])):
+                    old_path = record["path"]
+                    if old_path not in path_map:
+                        new_path = f"attachments/{uuid.uuid4().hex}{Path(old_path).suffix.lower()}"
+                        path_map[old_path] = new_path
+                        stage = safe_staging_directory(self.path.parent) / f"{uuid.uuid4().hex}.tmp"
+                        final = attachment_path(self.path.parent, new_path)
+                        staged.append((stage, final))
+                        stage.write_bytes(files[old_path])
+                    rewritten.append({"path": path_map[old_path], "name": safe_original_name(record["name"])})
+                if "attachments" in payload:
+                    payload["attachments"] = rewritten
                 payload.setdefault("id", str(uuid.uuid4()))
                 payload["code"], payload["name"] = code, str(payload["name"]).strip()
                 payload["updatedAt"] = datetime.now().isoformat(timespec="seconds")
@@ -402,7 +504,13 @@ class AssetStore:
                     (payload["id"], code, payload["name"], json.dumps(payload, ensure_ascii=False), payload["updatedAt"]),
                 )
                 imported += 1
-            for key, value in (("company_name", settings.get("companyName")), ("currency", settings.get("currency")), ("commercial_reg", settings.get("commercialReg")), ("tax_number", settings.get("taxNumber"))):
+            for stage, final in staged:
+                final.parent.mkdir(parents=True, exist_ok=True)
+                if final.exists():
+                    raise FileExistsError("تعارض غير متوقع في اسم المرفق المستعاد.")
+                os.replace(stage, final)
+                created.append(final)
+            for key, value in (("company_name", settings.get("companyName")), ("currency", settings.get("currency")), ("commercial_reg", settings.get("commercialReg")), ("tax_number", settings.get("taxNumber")), ("report_templates", settings.get("reportTemplates"))):
                 if value:
                     self.conn.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
             restored_categories = list(backup_categories if replace and backup_categories is not None else self.get_categories())
@@ -417,7 +525,15 @@ class AssetStore:
             self.conn.commit()
         except Exception:
             self.conn.rollback()
+            for path in created:
+                path.unlink(missing_ok=True)
             raise
+        finally:
+            for stage, _final in staged:
+                stage.unlink(missing_ok=True)
+        if replace:
+            old_records = [record for asset in previous_assets for record in asset.get("attachments", [])]
+            cleanup_unreferenced_files(self.path.parent, old_records, self.all())
         return imported
 
 

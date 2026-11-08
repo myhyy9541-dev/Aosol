@@ -3,12 +3,17 @@ from __future__ import annotations
 import tkinter as tk
 from datetime import date
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
 from aosol_core import CATEGORIES, STATUSES
 from aosol_excel import CUSTOM_DETAIL_FIELDS, export_custom_period_workbook, export_report_csv, export_report_workbook
 from aosol_reports import build_asset_report, report_view
+from aosol_report_templates import (
+    DATE_MODES, SECTION_KEYS, TEMPLATE_SETTING_KEY, decode_report_templates,
+    period_bounds, remove_report_template,
+    upsert_report_template,
+)
 from ui_components import ScrollableFrame
 
 NAVY = "#12213a"
@@ -19,6 +24,35 @@ MUTED = "#718096"
 BG = "#f3f6fa"
 WHITE = "#ffffff"
 BORDER = "#e2e8f0"
+MONTH_NAMES = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
+
+
+def _quick_period_controls(parent: tk.Widget, mode_var: tk.StringVar, month_var: tk.StringVar,
+                           year_var: tk.StringVar, apply: Any) -> None:
+    """Add compact Arabic month/year selectors to a report form."""
+    box = tk.Frame(parent, bg=WHITE)
+    box.pack(side="right", padx=6, pady=4)
+    tk.Label(box, text="اختيار سريع للفترة", bg=WHITE, fg=MUTED, font=("Tahoma", 8)).pack(anchor="e")
+    controls = tk.Frame(box, bg=WHITE)
+    controls.pack(anchor="e")
+    modes = {"شهري": "monthly", "سنوي": "yearly", "مخصص": "custom"}
+    reverse = {value: key for key, value in modes.items()}
+    shown_mode = tk.StringVar(value=reverse.get(mode_var.get(), "مخصص"))
+    mode = ttk.Combobox(controls, textvariable=shown_mode, values=list(modes), state="readonly", width=8, justify="right")
+    mode.pack(side="right", padx=2, ipady=2)
+    mode.bind("<<ComboboxSelected>>", lambda _event: mode_var.set(modes.get(shown_mode.get(), "custom")))
+    mode_var.trace_add("write", lambda *_: shown_mode.set(reverse.get(mode_var.get(), "مخصص")))
+    shown_month = tk.StringVar(value=MONTH_NAMES[int(month_var.get()) - 1] if month_var.get().isdigit() and 1 <= int(month_var.get()) <= 12 else MONTH_NAMES[0])
+    month = ttk.Combobox(controls, textvariable=shown_month, values=MONTH_NAMES, state="readonly", width=9, justify="right")
+    month.pack(side="right", padx=2, ipady=2)
+    month.bind("<<ComboboxSelected>>", lambda _event: month_var.set(str(MONTH_NAMES.index(shown_month.get()) + 1)))
+    month_var.trace_add("write", lambda *_: shown_month.set(MONTH_NAMES[int(month_var.get()) - 1] if month_var.get().isdigit() and 1 <= int(month_var.get()) <= 12 else MONTH_NAMES[0]))
+    years = [str(value) for value in range(1900, date.today().year + 11)]
+    year = ttk.Combobox(controls, textvariable=year_var, values=years, state="normal", width=6, justify="right")
+    year.pack(side="right", padx=2, ipady=2)
+    tk.Button(controls, text="تطبيق", command=apply, bg=WHITE, fg=NAVY, font=("Tahoma", 8, "bold"),
+              relief="flat", bd=0, padx=7, pady=3, highlightthickness=1, highlightbackground=BORDER).pack(side="right", padx=2)
+    tk.Label(box, text="الشهر / السنة", bg=WHITE, fg=MUTED, font=("Tahoma", 7)).pack(anchor="e")
 
 
 class ReportsDialog(tk.Toplevel):
@@ -39,6 +73,9 @@ class ReportsDialog(tk.Toplevel):
         self.transient(parent)
         self.from_var = tk.StringVar(value=date.today().replace(month=1, day=1).isoformat())
         self.to_var = tk.StringVar(value=date.today().isoformat())
+        self.period_mode_var = tk.StringVar(value="custom")
+        self.period_month_var = tk.StringVar(value=str(date.today().month))
+        self.period_year_var = tk.StringVar(value=str(date.today().year))
         self.kind_var = tk.StringVar(value=self.REPORT_KINDS[0])
         self.category_var = tk.StringVar(value="الكل")
         self.department_var = tk.StringVar(value="الكل")
@@ -75,6 +112,9 @@ class ReportsDialog(tk.Toplevel):
         self._field(row1, "من تاريخ", self.from_var, width=13)
         self._field(row1, "إلى تاريخ", self.to_var, width=13)
         self._field(row1, "الفئة", self.category_var, values=["الكل", *CATEGORIES], width=26)
+        quick_row = tk.Frame(filters, bg=WHITE)
+        quick_row.pack(fill="x", padx=12, pady=(2, 5))
+        _quick_period_controls(quick_row, self.period_mode_var, self.period_month_var, self.period_year_var, self._apply_quick_period)
         row2 = tk.Frame(filters, bg=WHITE)
         row2.pack(fill="x", padx=12, pady=(4, 10))
         departments = sorted({str(a.get("department", "")).strip() for a in self.assets if str(a.get("department", "")).strip()})
@@ -89,7 +129,6 @@ class ReportsDialog(tk.Toplevel):
         self._button(row2, "تحديث التقرير", self.generate, primary=True).pack(side="left", padx=5, pady=5)
         self._button(row2, "تصدير Excel / CSV", self.export).pack(side="left", padx=5, pady=5)
         self._button(row2, "Excel مخصص للفترة", self.custom_export).pack(side="left", padx=5, pady=5)
-
         self.kpi_frame = tk.Frame(page, bg=BG)
         self.kpi_frame.pack(fill="x", padx=16, pady=(2, 8))
         self.note_label = tk.Label(page, text="", bg=BG, fg="#805b10", font=("Tahoma", 9), anchor="e", justify="right", wraplength=1180)
@@ -107,6 +146,17 @@ class ReportsDialog(tk.Toplevel):
         self.tree.pack(side="top", fill="both", expand=True, padx=(10, 0), pady=(3, 0))
         hs.pack(side="bottom", fill="x", padx=10, pady=(0, 8))
         vs.place(relx=0.99, rely=0.10, relheight=0.80, anchor="ne")
+
+    def _apply_quick_period(self) -> None:
+        try:
+            mode = self.period_mode_var.get()
+            if mode in DATE_MODES and mode != "custom":
+                start, end = period_bounds(mode, int(self.period_year_var.get()), int(self.period_month_var.get()) if mode == "monthly" else None)
+                self.from_var.set(start.isoformat())
+                self.to_var.set(end.isoformat())
+            self.generate()
+        except (TypeError, ValueError) as exc:
+            messagebox.showerror("فترة غير صالحة", str(exc), parent=self)
 
     def _field(self, parent: tk.Widget, label: str, variable: tk.StringVar, *, values: list[str] | None = None, width: int = 18) -> None:
         box = tk.Frame(parent, bg=WHITE)
@@ -211,6 +261,8 @@ class CustomExcelDialog(tk.Toplevel):
         super().__init__(parent)
         self.parent, self.assets, self.report = parent, assets, report
         self.company, self.currency, self.filters = company, currency, filters
+        self.store = getattr(getattr(parent, "parent", None), "store", None)
+        self.template_columns = {key for key, _label in CUSTOM_DETAIL_FIELDS}
         self.title("Aosol | إعداد تقرير Excel مخصص")
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         width, height = min(1000, max(760, sw - 40)), min(850, max(520, sh - 70))
@@ -222,6 +274,10 @@ class CustomExcelDialog(tk.Toplevel):
 
         self.from_var = tk.StringVar(value=report["fromDate"])
         self.to_var = tk.StringVar(value=report["toDate"])
+        current_end = date.fromisoformat(report["toDate"])
+        self.period_mode_var = tk.StringVar(value=parent.period_mode_var.get())
+        self.period_month_var = tk.StringVar(value=parent.period_month_var.get() or str(current_end.month))
+        self.period_year_var = tk.StringVar(value=parent.period_year_var.get() or str(current_end.year))
         self.granularity_var = tk.StringVar(value="شهري")
         self.orientation_var = tk.StringVar(value="landscape")
         self.total_var = tk.BooleanVar(value=True)
@@ -234,6 +290,7 @@ class CustomExcelDialog(tk.Toplevel):
             "include_departments": tk.BooleanVar(value=True),
         }
         self.column_vars = {key: tk.BooleanVar(value=key in self.DEFAULT_COLUMNS) for key, _label in CUSTOM_DETAIL_FIELDS}
+        self.template_var = tk.StringVar()
         category, department, query = filters.get("category", "الكل"), filters.get("department", "الكل"), filters.get("query", "").strip().casefold()
         self.rows = [
             asset for asset in assets
@@ -258,12 +315,24 @@ class CustomExcelDialog(tk.Toplevel):
         self.page_scroll.pack(fill="both", expand=True, padx=12, pady=8)
         page = self.page_scroll.content
 
+        templates = tk.LabelFrame(page, text="قوالب التقارير المحفوظة", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=8)
+        templates.pack(fill="x", padx=8, pady=(5, 7))
+        self.template_combo = ttk.Combobox(templates, textvariable=self.template_var, state="readonly", width=32, justify="right")
+        self.template_combo.pack(side="right", padx=5, ipady=3)
+        self._button(templates, "تطبيق القالب", self.apply_template).pack(side="right", padx=3)
+        self._button(templates, "حفظ كقالب", self.save_template).pack(side="right", padx=3)
+        self._button(templates, "حذف القالب", self.delete_template).pack(side="right", padx=3)
+        self._refresh_templates()
+
         period = tk.LabelFrame(page, text="الفترة والتخطيط", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=10)
         period.pack(fill="x", padx=8, pady=(5, 9))
-        self._form_field(period, "نوع التقرير", self.granularity_var, ["شهري", "سنوي", "الفترة كاملة"], 15)
+        self._form_field(period, "نوع التقرير", self.granularity_var, ["شهري", "سنوي", "الفترة كاملة", "مخصص"], 15)
         self._form_field(period, "من تاريخ (YYYY-MM-DD)", self.from_var, None, 18)
         self._form_field(period, "إلى تاريخ (YYYY-MM-DD)", self.to_var, None, 18)
         self._form_field(period, "اتجاه ورقة A4", self.orientation_var, ["landscape", "portrait"], 14, labels={"landscape": "أفقي", "portrait": "عمودي"})
+        quick_period = tk.Frame(period, bg=WHITE)
+        quick_period.pack(fill="x", side="bottom", pady=(6, 1))
+        _quick_period_controls(quick_period, self.period_mode_var, self.period_month_var, self.period_year_var, self.apply_quick_period)
 
         scope = tk.LabelFrame(page, text="الصفوف / الأصول المشمولة — اختر سجلًا أو أكثر", bg=WHITE, fg=NAVY, font=("Tahoma", 10, "bold"), padx=12, pady=8)
         scope.pack(fill="x", padx=8, pady=8)
@@ -321,6 +390,115 @@ class CustomExcelDialog(tk.Toplevel):
         self._button(footer, "إنشاء ملف Excel", self.export, primary=True).pack(side="left", padx=12, pady=9)
         self._button(footer, "إغلاق", self.destroy).pack(side="left", padx=4, pady=9)
 
+    def _stored_templates(self) -> dict[str, dict[str, Any]]:
+        if self.store is None:
+            return {}
+        try:
+            return decode_report_templates(self.store.get_setting(TEMPLATE_SETTING_KEY), self.template_columns)
+        except Exception:
+            return {}
+
+    def _refresh_templates(self, selected: str | None = None) -> None:
+        names = sorted(self._stored_templates(), key=str.casefold)
+        self.template_combo.configure(values=names)
+        if selected in names:
+            self.template_var.set(selected or "")
+        elif self.template_var.get() not in names:
+            self.template_var.set(names[0] if names else "")
+
+    def _capture_template(self) -> dict[str, Any]:
+        start = date.fromisoformat(self.from_var.get().strip())
+        end = date.fromisoformat(self.to_var.get().strip())
+        if start > end:
+            raise ValueError("تاريخ البداية يجب ألا يتجاوز تاريخ النهاية.")
+        mode = self.period_mode_var.get()
+        return {
+            "granularity": self.granularity_var.get(),
+            "orientation": self.orientation_var.get(),
+            "sections": {key: variable.get() for key, variable in self.section_vars.items()},
+            "include_detail_total": self.total_var.get(),
+            "columns": [key for key, variable in self.column_vars.items() if variable.get()],
+            "date_mode": mode,
+            "year": int(self.period_year_var.get()),
+            "month": int(self.period_month_var.get()) if mode == "monthly" else None,
+            "from_date": start.isoformat(),
+            "to_date": end.isoformat(),
+        }
+
+    def save_template(self) -> None:
+        if self.store is None:
+            messagebox.showerror("تعذر حفظ القالب", "تخزين إعدادات التطبيق غير متاح.", parent=self)
+            return
+        name = simpledialog.askstring("حفظ قالب", "اسم القالب:", parent=self)
+        if name is None:
+            return
+        name = name.strip()
+        existing = self._stored_templates()
+        if name in existing and not messagebox.askyesno("استبدال القالب", f"القالب «{name}» موجود. هل تريد استبداله؟", parent=self):
+            return
+        try:
+            raw = self.store.get_setting(TEMPLATE_SETTING_KEY)
+            updated = upsert_report_template(raw, name, self._capture_template(), self.template_columns)
+            self.store.set_setting(TEMPLATE_SETTING_KEY, updated)
+            self._refresh_templates(name)
+            messagebox.showinfo("تم الحفظ", f"تم حفظ القالب «{name}».", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر حفظ القالب", str(exc), parent=self)
+
+    def apply_template(self) -> None:
+        name = self.template_var.get()
+        template = self._stored_templates().get(name)
+        if template is None:
+            messagebox.showerror("تعذر تطبيق القالب", "اختر قالبًا صالحًا أولًا.", parent=self)
+            return
+        try:
+            self.granularity_var.set(template["granularity"])
+            self.orientation_var.set(template["orientation"])
+            self.total_var.set(template["include_detail_total"])
+            for key in SECTION_KEYS:
+                self.section_vars[key].set(template["sections"][key])
+            chosen = set(template["columns"])
+            for key, variable in self.column_vars.items():
+                variable.set(key in chosen)
+            self.period_mode_var.set(template["date_mode"])
+            self.period_year_var.set(str(template["year"]))
+            if template["month"] is not None:
+                self.period_month_var.set(str(template["month"]))
+            if template["date_mode"] in ("monthly", "yearly"):
+                start, end = period_bounds(template["date_mode"], template["year"], template["month"])
+                self.from_var.set(start.isoformat())
+                self.to_var.set(end.isoformat())
+            else:
+                self.from_var.set(template["from_date"])
+                self.to_var.set(template["to_date"])
+        except (KeyError, TypeError, ValueError) as exc:
+            messagebox.showerror("تعذر تطبيق القالب", f"إعدادات القالب غير صالحة: {exc}", parent=self)
+
+    def delete_template(self) -> None:
+        name = self.template_var.get()
+        if not name or name not in self._stored_templates():
+            messagebox.showerror("تعذر حذف القالب", "اختر قالبًا صالحًا أولًا.", parent=self)
+            return
+        if not messagebox.askyesno("حذف القالب", f"هل تريد حذف القالب «{name}»؟", parent=self):
+            return
+        try:
+            raw = self.store.get_setting(TEMPLATE_SETTING_KEY)
+            self.store.set_setting(TEMPLATE_SETTING_KEY, remove_report_template(raw, name, self.template_columns))
+            self.template_var.set("")
+            self._refresh_templates()
+        except Exception as exc:
+            messagebox.showerror("تعذر حذف القالب", str(exc), parent=self)
+
+    def apply_quick_period(self) -> None:
+        try:
+            mode = self.period_mode_var.get()
+            if mode in ("monthly", "yearly"):
+                start, end = period_bounds(mode, int(self.period_year_var.get()), int(self.period_month_var.get()) if mode == "monthly" else None)
+                self.from_var.set(start.isoformat())
+                self.to_var.set(end.isoformat())
+        except (TypeError, ValueError) as exc:
+            messagebox.showerror("فترة غير صالحة", str(exc), parent=self)
+
     def _form_field(self, parent: tk.Widget, label: str, variable: tk.StringVar, values: list[str] | None, width: int, labels: dict[str, str] | None = None) -> None:
         box = tk.Frame(parent, bg=WHITE)
         box.pack(side="right", padx=6, pady=4)
@@ -362,7 +540,7 @@ class CustomExcelDialog(tk.Toplevel):
         try:
             export_custom_period_workbook(
                 path, self.assets, self.company, self.currency, start, end,
-                granularity=self.granularity_var.get(), selected_codes=selected_codes,
+                granularity="الفترة كاملة" if self.granularity_var.get() == "مخصص" else self.granularity_var.get(), selected_codes=selected_codes,
                 columns=chosen_columns, include_detail_total=self.total_var.get(),
                 orientation=orientation, filters=self.filters, **options,
             )

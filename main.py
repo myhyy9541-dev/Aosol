@@ -17,6 +17,9 @@ from aosol_core import (
     APP_NAME, METHODS, STATUSES, AssetStore, demo_assets,
     depreciation_schedule, export_csv, money, valuation,
 )
+from aosol_documents import (
+    MAX_ATTACHMENT_BYTES, build_document_archive, inspect_source_file,
+)
 from aosol_excel import DISPOSAL_TYPES, export_assets_workbook, export_import_template, parse_import_file
 from import_ui import ImportPreviewDialog
 from reports_ui import ReportsDialog
@@ -105,6 +108,7 @@ class AosolApp(tk.Tk):
             color = TEAL if selected else MUTED
             tk.Button(nav, text=label, command=callback, bg=WHITE, fg=color, activebackground="#f4f8fb", activeforeground=TEAL, font=("Tahoma", 10, "bold" if selected else "normal"), relief="flat", padx=18, pady=12, cursor="hand2", bd=0).pack(side="right", padx=4)
         self._button(nav, "تعديل الأصل", self.edit_asset).pack(side="left", padx=10, pady=5)
+        self._button(nav, "تقرير وثائق الأصول", self.export_asset_documents).pack(side="left", padx=5, pady=5)
         self.content_scroll = ScrollableFrame(self, background=BG)
         self.content_scroll.pack(fill="both", expand=True, padx=28, pady=(20, 14))
         self.content = self.content_scroll.content
@@ -293,15 +297,34 @@ class AosolApp(tk.Tk):
         if asset:
             AssetDialog(self, asset, self.save_asset, self.currency)
 
-    def save_asset(self, asset: dict[str, Any]) -> None:
+    def save_asset(self, asset: dict[str, Any], pending_attachments: list[str] | None = None) -> bool:
         try:
-            self.store.save(asset)
+            if pending_attachments:
+                self.store.save_with_attachments(asset, pending_attachments)
+            else:
+                self.store.save(asset)
             self.refresh()
             messagebox.showinfo("تم الحفظ", "تم حفظ بيانات الأصل بنجاح.", parent=self)
+            return True
         except sqlite3.IntegrityError as exc:
             messagebox.showerror("تعذر الحفظ", str(exc), parent=self)
         except Exception as exc:
             messagebox.showerror("تعذر الحفظ", f"تحقق من رمز الأصل والحقول المدخلة.\n{exc}", parent=self)
+        return False
+
+    def export_asset_documents(self) -> None:
+        assets = [asset for asset in self.assets if asset.get("attachments")]
+        if not assets:
+            messagebox.showinfo("تقرير المستندات", "لا توجد أصول ذات مرفقات.", parent=self)
+            return
+        path = filedialog.asksaveasfilename(parent=self, title="حفظ تقرير وثائق الأصول", defaultextension=".zip", initialfile="تقرير_وثائق_الأصول.zip", filetypes=[("حزمة مستندات ZIP", "*.zip")])
+        if not path:
+            return
+        try:
+            build_document_archive(path, assets, self.store.path.parent)
+            messagebox.showinfo("تم إنشاء التقرير", f"تم إنشاء حزمة محلية تضم {len(assets)} أصلًا مع مرفقاته:\n{path}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("تعذر إنشاء التقرير", str(exc), parent=self)
 
     def delete_asset(self) -> None:
         asset = self.selected_asset()
@@ -674,9 +697,11 @@ class AosolApp(tk.Tk):
 
 
 class AssetDialog(tk.Toplevel):
-    def __init__(self, parent: AosolApp, asset: dict[str, Any] | None, on_save: Callable[[dict[str, Any]], None], currency: str):
+    def __init__(self, parent: AosolApp, asset: dict[str, Any] | None, on_save: Callable[..., bool], currency: str):
         super().__init__(parent)
         self.parent, self.original, self.on_save, self.currency = parent, asset, on_save, currency
+        self.attachment_records: list[dict[str, str]] = [dict(record) for record in (asset or {}).get("attachments", []) if isinstance(record, dict)]
+        self.pending_attachments: list[str] = []
         self.title("تعديل بيانات الأصل" if asset else "إضافة أصل جديد")
         screen_width, screen_height = self.winfo_screenwidth(), self.winfo_screenheight()
         width = min(900, max(680, screen_width - 48))
@@ -750,6 +775,16 @@ class AssetDialog(tk.Toplevel):
         self.notes = tk.Text(notes_cell, height=3, wrap="word", font=("Tahoma", 9), relief="solid", bd=1, bg="#fbfcfe")
         self.notes.pack(fill="x")
         self.notes.insert("1.0", str(defaults.get("notes", "")))
+        attachment_cell = tk.Frame(form, bg=WHITE)
+        attachment_cell.grid(row=(len(fields) + 1) // 2 + 1, column=0, columnspan=2, sticky="ew", padx=9, pady=7)
+        tk.Label(attachment_cell, text="المرفقات (حتى ملفين: صورة أو PDF، 20 ميغابايت لكل ملف)", bg=WHITE, fg=INK, font=("Tahoma", 9, "bold"), anchor="e").pack(fill="x", pady=(0, 4))
+        self.attachment_listbox = tk.Listbox(attachment_cell, height=4, font=("Tahoma", 9), justify="right", activestyle="dotbox", exportselection=False)
+        self.attachment_listbox.pack(fill="x", pady=(0, 5))
+        attachment_buttons = tk.Frame(attachment_cell, bg=WHITE)
+        attachment_buttons.pack(fill="x")
+        parent._button(attachment_buttons, "إضافة صورة أو PDF", self.add_attachment).pack(side="right", padx=4)
+        parent._button(attachment_buttons, "إزالة المحدد", self.remove_attachment, kind="danger").pack(side="right", padx=4)
+        self.refresh_attachment_list()
         self._update_depreciation_fields()
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill="x", padx=18, pady=(0, 16))
@@ -776,6 +811,40 @@ class AssetDialog(tk.Toplevel):
                     widget.grid()
                 else:
                     widget.grid_remove()
+
+    def refresh_attachment_list(self) -> None:
+        if not hasattr(self, "attachment_listbox"):
+            return
+        self.attachment_listbox.delete(0, "end")
+        for record in self.attachment_records:
+            self.attachment_listbox.insert("end", f"مرفق محفوظ: {record.get('name', 'ملف')}")
+        for source in self.pending_attachments:
+            self.attachment_listbox.insert("end", f"سيُضاف عند الحفظ: {Path(source).name}")
+
+    def add_attachment(self) -> None:
+        if len(self.attachment_records) + len(self.pending_attachments) >= 2:
+            messagebox.showerror("حد المرفقات", "يمكن إرفاق ملفين كحد أقصى لكل أصل.", parent=self)
+            return
+        selected = filedialog.askopenfilename(parent=self, title="اختر صورة أو ملف PDF", filetypes=[("صور وPDF", "*.jpg *.jpeg *.png *.webp *.gif *.bmp *.tif *.tiff *.pdf")])
+        if not selected:
+            return
+        try:
+            inspect_source_file(selected)
+            self.pending_attachments.append(str(Path(selected).resolve()))
+            self.refresh_attachment_list()
+        except Exception as exc:
+            messagebox.showerror("مرفق غير صالح", str(exc), parent=self)
+
+    def remove_attachment(self) -> None:
+        selected = self.attachment_listbox.curselection()
+        if not selected:
+            return
+        index = selected[0]
+        if index < len(self.attachment_records):
+            self.attachment_records.pop(index)
+        else:
+            self.pending_attachments.pop(index - len(self.attachment_records))
+        self.refresh_attachment_list()
 
     def submit(self) -> None:
         try:
@@ -833,8 +902,9 @@ class AssetDialog(tk.Toplevel):
                                 result["annualDepreciationRate"] = candidate_rate
                         except ValueError:
                             pass
-            self.on_save(result)
-            self.destroy()
+            result["attachments"] = list(self.attachment_records)
+            if self.on_save(result, list(self.pending_attachments)):
+                self.destroy()
         except Exception as exc:
             messagebox.showerror("تحقق من البيانات", str(exc), parent=self)
 

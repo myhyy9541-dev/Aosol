@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -85,15 +87,30 @@ def copy_database_to_directory(connection: sqlite3.Connection, directory: str | 
     target = target_dir / "aosol.db"
     if target.exists():
         raise FileExistsError(f"يوجد ملف قاعدة بيانات بالفعل في المسار المحدد: {target}")
+    source_row = connection.execute("PRAGMA database_list").fetchone()
+    source_db = Path(source_row[2]).resolve() if source_row and source_row[2] else None
+    source_attachments = source_db.parent / "attachments" if source_db else None
+    target_attachments = target_dir / "attachments"
+    staged_attachments = target_dir / f".attachments-copy-{uuid.uuid4().hex}"
+    if source_attachments and source_attachments.is_dir() and target_attachments.exists():
+        raise FileExistsError(f"يوجد مجلد مرفقات بالفعل في المسار المحدد: {target_attachments}")
     destination: sqlite3.Connection | None = None
+    attachments_installed = False
     try:
         connection.commit()
+        if source_attachments and source_attachments.is_dir():
+            if source_attachments.is_symlink():
+                raise ValueError("مجلد المرفقات الأصلي يجب ألا يكون رابطًا رمزيًا.")
+            shutil.copytree(source_attachments, staged_attachments, ignore=shutil.ignore_patterns(".staging"), symlinks=True)
         destination = sqlite3.connect(target)
         connection.backup(destination)
         destination.commit()
         check = destination.execute("PRAGMA integrity_check").fetchone()
         if not check or check[0] != "ok":
             raise sqlite3.DatabaseError("تعذر التحقق من سلامة نسخة قاعدة البيانات المنقولة")
+        if staged_attachments.exists():
+            os.replace(staged_attachments, target_attachments)
+            attachments_installed = True
     except Exception:
         if destination is not None:
             destination.close()
@@ -101,6 +118,9 @@ def copy_database_to_directory(connection: sqlite3.Connection, directory: str | 
             target.unlink(missing_ok=True)
         except OSError:
             pass
+        shutil.rmtree(staged_attachments, ignore_errors=True)
+        if attachments_installed:
+            shutil.rmtree(target_attachments, ignore_errors=True)
         raise
     finally:
         if destination is not None:
