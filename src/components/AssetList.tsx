@@ -22,7 +22,7 @@ import {
   Download
 } from 'lucide-react';
 import { Asset, AssetCategory, DepreciationMethod, AssetStatus } from '../types/asset';
-import { getCurrentAssetValuation, getTotalCost } from '../utils/depreciation';
+import { getAssetDepreciationInputMode, getCurrentAssetValuation, getEquivalentUsefulLifeYears, getTotalCost } from '../utils/depreciation';
 import { formatCurrency, formatDate, formatNumber, formatPercent, getMethodLabel, getStartRuleLabel, getStatusBadge } from '../utils/formatters';
 import { downloadExcelTemplate } from '../utils/excel';
 
@@ -358,7 +358,12 @@ export const AssetList: React.FC<AssetListProps> = ({
                           {formatDate(asset.inServiceDate || asset.purchaseDate)}
                         </div>
                         <div className="text-[11px] text-slate-400 font-mono-numbers mt-0.5">
-                          العمر: {asset.usefulLifeYears} سنوات
+                          {asset.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(asset) === 'rate' ? (
+                            <>
+                              <span className="block text-sky-400">المعدل السنوي: {asset.annualDepreciationRate}%</span>
+                              <span className="block">العمر المكافئ: {getEquivalentUsefulLifeYears(asset)} سنوات</span>
+                            </>
+                          ) : `العمر: ${getEquivalentUsefulLifeYears(asset)} سنوات`}
                         </div>
                       </td>
 

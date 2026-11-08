@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -97,24 +98,57 @@ def depreciation_schedule(asset: dict[str, Any]) -> list[dict[str, float | int |
         return [{"year": 1, "period": f"السنة 1 ({start.year})", "beginning": cost, "expense": 0.0, "accumulated": 0.0, "ending": cost}]
 
     if method == "straight_line":
-        annual = base / life
-        remaining = base
-        periods = life + (1 if first_ratio < 1 else 0)
-        for i in range(periods):
-            beginning = book
-            if i == 0 and first_ratio < 1:
-                expense = annual * first_ratio
-            elif i == periods - 1 and first_ratio < 1:
-                expense = remaining
-            else:
-                expense = annual
-            expense = min(max(0.0, expense), remaining, max(0.0, beginning - salvage))
-            accumulated += expense
-            book -= expense
-            remaining -= expense
-            rows.append({"year": i + 1, "period": f"السنة {i + 1} ({start.year + i})", "beginning": beginning, "expense": expense, "accumulated": accumulated, "ending": book})
-            if remaining <= 0.01:
-                break
+        input_mode = asset.get("depreciationInputMode", "years")
+        if input_mode == "rate":
+            try:
+                annual_rate = float(asset.get("annualDepreciationRate"))
+            except (TypeError, ValueError):
+                raise ValueError("معدل الإهلاك السنوي مطلوب عند اختيار النسبة.")
+            if not math.isfinite(annual_rate) or not 0.1 <= annual_rate <= 100:
+                raise ValueError("يجب أن يكون معدل الإهلاك السنوي بين 0.1 و100 بالمئة.")
+            rate_fraction = annual_rate / 100.0
+            annual = base * rate_fraction
+            periods = (1 + math.ceil(1 / rate_fraction - first_ratio)
+                       if first_ratio < 1 else math.ceil(1 / rate_fraction))
+            periods = min(1001, periods)
+            remaining = base
+            for i in range(periods):
+                beginning = book
+                if i == 0 and first_ratio < 1:
+                    expense = annual * first_ratio
+                elif i == periods - 1:
+                    expense = remaining
+                else:
+                    expense = annual
+                expense = min(max(0.0, expense), remaining, max(0.0, beginning - salvage))
+                accumulated = min(base, accumulated + expense)
+                book = max(salvage, beginning - expense)
+                remaining = max(0.0, remaining - expense)
+                rows.append({"year": i + 1, "period": f"السنة {i + 1} ({start.year + i})", "beginning": beginning, "expense": expense, "accumulated": accumulated, "ending": book})
+                if remaining <= 0.01:
+                    break
+        elif input_mode == "years":
+            # Keep the historical integer-life calculation unchanged for old records.
+            annual = base / life
+            remaining = base
+            periods = life + (1 if first_ratio < 1 else 0)
+            for i in range(periods):
+                beginning = book
+                if i == 0 and first_ratio < 1:
+                    expense = annual * first_ratio
+                elif i == periods - 1 and first_ratio < 1:
+                    expense = remaining
+                else:
+                    expense = annual
+                expense = min(max(0.0, expense), remaining, max(0.0, beginning - salvage))
+                accumulated += expense
+                book -= expense
+                remaining -= expense
+                rows.append({"year": i + 1, "period": f"السنة {i + 1} ({start.year + i})", "beginning": beginning, "expense": expense, "accumulated": accumulated, "ending": book})
+                if remaining <= 0.01:
+                    break
+        else:
+            raise ValueError("أساس إدخال الإهلاك يجب أن يكون years أو rate.")
     elif method in ("double_declining", "declining_150"):
         rate = (2.0 if method == "double_declining" else 1.5) / life
         periods = life + (1 if first_ratio < 1 else 0)
@@ -400,12 +434,14 @@ def demo_assets() -> list[dict[str, Any]]:
 
 
 def export_csv(path: str | Path, assets: list[dict[str, Any]]) -> None:
-    fields = ["code", "name", "category", "purchaseDate", "inServiceDate", "purchaseCost", "additionalCosts", "salvageValue", "usefulLifeYears", "depreciationMethod", "department", "location", "custodian", "status", "notes"]
+    fields = ["code", "name", "category", "purchaseDate", "inServiceDate", "purchaseCost", "additionalCosts", "salvageValue", "depreciationInputMode", "annualDepreciationRate", "usefulLifeYears", "depreciationMethod", "department", "location", "custodian", "status", "notes"]
     with open(path, "w", newline="", encoding="utf-8-sig") as file:
         writer = csv.DictWriter(file, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for asset in assets:
-            writer.writerow({field: safe_spreadsheet_text(asset.get(field)) for field in fields})
+            row = {field: safe_spreadsheet_text(asset.get(field)) for field in fields}
+            row["depreciationInputMode"] = asset.get("depreciationInputMode", "years")
+            writer.writerow(row)
 
 
 def export_xlsx(path: str | Path, assets: list[dict[str, Any]], currency: str) -> None:
@@ -416,11 +452,11 @@ def export_xlsx(path: str | Path, assets: list[dict[str, Any]], currency: str) -
     sheet = workbook.active
     sheet.title = "سجل الأصول"
     sheet.sheet_view.rightToLeft = True
-    headers = ["الكود", "اسم الأصل", "الفئة", "تاريخ الشراء", "تاريخ التشغيل", "التكلفة الإجمالية", "الإهلاك المتراكم", "صافي القيمة الدفترية", "القيمة التخريدية", "العمر (سنة)", "طريقة الإهلاك", "الإدارة", "الموقع", "العهدة", "الحالة"]
+    headers = ["الكود", "اسم الأصل", "الفئة", "تاريخ الشراء", "تاريخ التشغيل", "التكلفة الإجمالية", "الإهلاك المتراكم", "صافي القيمة الدفترية", "القيمة التخريدية", "أساس الإدخال", "المعدل السنوي (%)", "العمر (سنة)", "طريقة الإهلاك", "الإدارة", "الموقع", "العهدة", "الحالة"]
     sheet.append(headers)
     for asset in assets:
         val = valuation(asset)
-        sheet.append([asset.get("code"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), val["totalCost"], val["accumulatedDepreciation"], val["netBookValue"], money(asset.get("salvageValue")), asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), ""), asset.get("department"), asset.get("location"), asset.get("custodian"), STATUSES.get(asset.get("status"), "نشط")])
+        sheet.append([asset.get("code"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), val["totalCost"], val["accumulatedDepreciation"], val["netBookValue"], money(asset.get("salvageValue")), asset.get("depreciationInputMode", "years"), asset.get("annualDepreciationRate"), asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), ""), asset.get("department"), asset.get("location"), asset.get("custodian"), STATUSES.get(asset.get("status"), "نشط")])
         for cell in sheet[sheet.max_row]:
             if isinstance(cell.value, str):
                 cell.data_type = "s"
@@ -436,7 +472,7 @@ def export_xlsx(path: str | Path, assets: list[dict[str, Any]], currency: str) -
             cell.alignment = Alignment(horizontal="right", vertical="center")
         for index in (6, 7, 8, 9):
             row[index - 1].number_format = '#,##0.00'
-    for idx, width in enumerate([17, 38, 32, 16, 16, 20, 20, 22, 19, 14, 30, 29, 28, 24, 19], 1):
+    for idx, width in enumerate([17, 38, 32, 16, 16, 20, 20, 22, 19, 16, 17, 14, 30, 29, 28, 24, 19], 1):
         sheet.column_dimensions[get_column_letter(idx)].width = width
     sheet.row_dimensions[1].height = 28
     workbook.save(path)

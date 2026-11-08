@@ -90,6 +90,16 @@ def build_asset_report(
             continue
 
         total_cost = money(asset.get("purchaseCost")) + money(asset.get("additionalCosts"))
+        method_key = asset.get("depreciationMethod", "straight_line")
+        input_mode = asset.get("depreciationInputMode", "years")
+        is_rate_mode = method_key == "straight_line" and input_mode == "rate"
+        input_basis_label = "نسبة سنوية من القيمة القابلة للإهلاك" if is_rate_mode else "العمر بالسنوات"
+        if method_key == "straight_line":
+            annual_rate = money(asset.get("annualDepreciationRate")) if is_rate_mode else (
+                100.0 / money(asset.get("usefulLifeYears")) if money(asset.get("usefulLifeYears")) > 0 else None
+            )
+        else:
+            annual_rate = None
         opening_valuation = valuation(asset, before) if purchase_date < start else {"totalCost": total_cost, "accumulatedDepreciation": 0.0, "netBookValue": 0.0, "currentYearExpense": 0.0}
         closing_valuation = valuation(asset, end)
         if purchase_date >= start:
@@ -124,8 +134,10 @@ def build_asset_report(
             "proceeds": proceeds, "disposalCosts": disposal_costs, "gainLoss": gain_loss,
             "endingBookValue": ending_book, "accumulatedDepreciation": closing_valuation["accumulatedDepreciation"],
             "salvageValue": money(asset.get("salvageValue")), "usefulLifeYears": money(asset.get("usefulLifeYears")),
-            "depreciationMethod": asset.get("depreciationMethod", "straight_line"),
-            "methodLabel": METHODS.get(asset.get("depreciationMethod"), ""), "status": status_at_end,
+            "depreciationMethod": method_key, "depreciationInputMode": "rate" if is_rate_mode else "years",
+            "inputBasisLabel": input_basis_label, "annualDepreciationRate": annual_rate,
+            "depreciationMethodLabel": METHODS.get(method_key, ""),
+            "methodLabel": METHODS.get(method_key, ""), "status": status_at_end,
             "statusLabel": STATUSES.get(status_at_end, status_at_end), "location": asset.get("location", ""),
             "custodian": asset.get("custodian", ""), "serialNumber": asset.get("serialNumber", ""),
             "supplier": asset.get("supplier", ""), "invoiceNumber": asset.get("invoiceNumber", ""),
@@ -188,9 +200,9 @@ def report_view(report: dict[str, Any], kind: str) -> tuple[list[str], list[list
         rows = [[r["disposalDate"], r["code"], r["name"], r["category"], r["department"], r["bookValue"], r["salePrice"], r["disposalCosts"], r["gainLoss"], r["buyerName"], r["reason"]] for r in report["disposals"]]
         return headers, rows, kind
     if kind == "الإهلاك للفترة":
-        headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "الإدارة", "طريقة الإهلاك", "رصيد أول المدة", "مصروف الإهلاك", "مجمع الإهلاك آخر المدة", "صافي القيمة آخر المدة", "ملاحظة"]
-        rows = [[r["code"], r["accountCode"], r["name"], r["category"], r["department"], r["methodLabel"], r["openingBookValue"], r["periodExpense"], r["accumulatedDepreciation"], r["endingBookValue"], r["expenseNote"]] for r in report["details"]]
+        headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "الإدارة", "طريقة الإهلاك", "أساس الإدخال", "المعدل السنوي من القيمة القابلة للإهلاك (%)", "رصيد أول المدة", "مصروف الإهلاك", "مجمع الإهلاك آخر المدة", "صافي القيمة آخر المدة", "ملاحظة"]
+        rows = [[r["code"], r["accountCode"], r["name"], r["category"], r["department"], r["methodLabel"], r["inputBasisLabel"], r["annualDepreciationRate"], r["openingBookValue"], r["periodExpense"], r["accumulatedDepreciation"], r["endingBookValue"], r["expenseNote"]] for r in report["details"]]
         return headers, rows, kind
-    headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "الإدارة", "الحالة", "تاريخ الشراء", "التكلفة الإجمالية", "رصيد أول المدة", "الإضافات", "مصروف الإهلاك", "قيمة الأصل المستبعد", "متحصلات البيع", "الربح / (الخسارة)", "صافي القيمة آخر المدة"]
-    rows = [[r["code"], r["accountCode"], r["name"], r["category"], r["department"], r["statusLabel"], r["purchaseDate"], r["totalCost"], r["openingBookValue"], r["additions"], r["periodExpense"], r["disposalBookValue"], r["proceeds"], r["gainLoss"], r["endingBookValue"]] for r in report["details"]]
+    headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "الإدارة", "الحالة", "تاريخ الشراء", "التكلفة الإجمالية", "أساس الإهلاك", "المعدل السنوي من القيمة القابلة للإهلاك (%)", "رصيد أول المدة", "الإضافات", "مصروف الإهلاك", "قيمة الأصل المستبعد", "متحصلات البيع", "الربح / (الخسارة)", "صافي القيمة آخر المدة"]
+    rows = [[r["code"], r["accountCode"], r["name"], r["category"], r["department"], r["statusLabel"], r["purchaseDate"], r["totalCost"], r["inputBasisLabel"], r["annualDepreciationRate"], r["openingBookValue"], r["additions"], r["periodExpense"], r["disposalBookValue"], r["proceeds"], r["gainLoss"], r["endingBookValue"]] for r in report["details"]]
     return headers, rows, "حركة الأصول للفترة"

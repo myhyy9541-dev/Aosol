@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, Calculator, HelpCircle, Sparkles, Building, Check, Clock } from 'lucide-react';
 import { Asset, AssetCategory, DepreciationMethod, DepreciationStartRule } from '../types/asset';
-import { getTotalCost } from '../utils/depreciation';
+import { getEffectiveDepreciationStartDate, getTotalCost, isValidAnnualDepreciationRate } from '../utils/depreciation';
 import { formatCurrency, formatNumber, formatPercent, getMethodLabel } from '../utils/formatters';
 import { STANDARD_DEPARTMENTS } from '../utils/storage';
 
@@ -32,6 +32,8 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   const [additionalCosts, setAdditionalCosts] = useState<number | string>(0);
   const [salvageValue, setSalvageValue] = useState<number | string>(2500);
   const [usefulLifeYears, setUsefulLifeYears] = useState<number | string>(5);
+  const [depreciationInputMode, setDepreciationInputMode] = useState<'years' | 'rate'>('rate');
+  const [annualDepreciationRate, setAnnualDepreciationRate] = useState<number | string>(20);
   const [depreciationMethod, setDepreciationMethod] = useState<DepreciationMethod>('straight_line');
   
   // Units of production fields
@@ -60,6 +62,8 @@ export const AssetModal: React.FC<AssetModalProps> = ({
       setAdditionalCosts(editingAsset.additionalCosts || 0);
       setSalvageValue(editingAsset.salvageValue || 0);
       setUsefulLifeYears(editingAsset.usefulLifeYears);
+      setDepreciationInputMode(editingAsset.depreciationInputMode === 'rate' ? 'rate' : 'years');
+      setAnnualDepreciationRate(editingAsset.annualDepreciationRate ?? 20);
       setDepreciationMethod(editingAsset.depreciationMethod);
       setTotalEstimatedUnits(editingAsset.totalEstimatedUnits || 10000);
       setUnitOfMeasure(editingAsset.unitOfMeasure || 'ساعة عمل');
@@ -73,13 +77,18 @@ export const AssetModal: React.FC<AssetModalProps> = ({
     } else {
       // New asset defaults
       const randomCode = `AST-${Math.floor(1000 + Math.random() * 9000)}`;
+      const defaultCategory = categories[0];
+      const defaultLife = defaultCategory?.defaultLifeYears || 5;
       setCode(randomCode);
       setName('');
+      setCategory(defaultCategory?.id || 'machinery');
       setPurchaseCost(5000000);
       setAdditionalCosts(0);
       setSalvageValue(250000);
-      setUsefulLifeYears(5);
-      setDepreciationMethod('straight_line');
+      setUsefulLifeYears(defaultLife);
+      setDepreciationInputMode('rate');
+      setAnnualDepreciationRate(100 / defaultLife);
+      setDepreciationMethod(defaultCategory?.defaultMethod || 'straight_line');
       setStartDepreciationRule('mid_month_15');
       setPurchaseDate(new Date().toISOString().split('T')[0]);
       setInServiceDate(new Date().toISOString().split('T')[0]);
@@ -100,6 +109,7 @@ export const AssetModal: React.FC<AssetModalProps> = ({
       const cat = categories.find((c) => c.id === newCatId);
       if (cat) {
         setUsefulLifeYears(cat.defaultLifeYears);
+        setAnnualDepreciationRate(cat.defaultLifeYears > 0 ? 100 / cat.defaultLifeYears : 20);
         setDepreciationMethod(cat.defaultMethod);
         const costNum = Number(purchaseCost) || 0;
         setSalvageValue(Math.round(costNum * (cat.defaultSalvagePercent / 100)));
@@ -119,12 +129,17 @@ export const AssetModal: React.FC<AssetModalProps> = ({
   const numSalvage = Math.min(Number(salvageValue) || 0, totalCost);
   const depreciableBase = Math.max(0, totalCost - numSalvage);
   const numYears = Math.max(1, Number(usefulLifeYears) || 1);
+  const rateValue = Number(annualDepreciationRate);
+  const isRateBasis = depreciationMethod === 'straight_line' && depreciationInputMode === 'rate';
+  const rateIsValid = isValidAnnualDepreciationRate(rateValue);
 
   let previewAnnualExpense = 0;
   let previewMethodLabel = getMethodLabel(depreciationMethod).ar;
 
   if (depreciationMethod === 'straight_line') {
-    previewAnnualExpense = depreciableBase / numYears;
+    previewAnnualExpense = isRateBasis
+      ? (rateIsValid ? depreciableBase * rateValue / 100 : 0)
+      : depreciableBase / numYears;
   } else if (depreciationMethod === 'double_declining') {
     previewAnnualExpense = totalCost * (2 / numYears);
   } else if (depreciationMethod === 'declining_150') {
@@ -137,6 +152,15 @@ export const AssetModal: React.FC<AssetModalProps> = ({
     previewAnnualExpense = (depreciableBase / units) * (units / numYears);
   }
 
+  const previewEffectiveStart = getEffectiveDepreciationStartDate({
+    inServiceDate,
+    purchaseDate,
+    startDepreciationRule,
+  } as Asset);
+  const previewFirstYearRatio = Math.max(1, 12 - previewEffectiveStart.getMonth()) / 12;
+  const previewFirstYearExpense = previewAnnualExpense * previewFirstYearRatio;
+  const equivalentLifeYears = isRateBasis && rateIsValid ? 100 / rateValue : numYears;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
@@ -145,6 +169,14 @@ export const AssetModal: React.FC<AssetModalProps> = ({
     }
     if (totalCost <= 0) {
       alert('يرجى إدخال تكلفة شراء صالحة للأصل.');
+      return;
+    }
+    if (isRateBasis && !rateIsValid) {
+      alert('يرجى إدخال نسبة إهلاك سنوية صحيحة بين 0.1% و100%.');
+      return;
+    }
+    if (depreciationMethod === 'straight_line' && depreciationInputMode === 'years' && (!Number.isFinite(Number(usefulLifeYears)) || Number(usefulLifeYears) <= 0)) {
+      alert('يرجى إدخال عمر إنتاجي صحيح أكبر من صفر.');
       return;
     }
 
@@ -158,7 +190,13 @@ export const AssetModal: React.FC<AssetModalProps> = ({
       purchaseCost: Number(purchaseCost) || 0,
       additionalCosts: Number(additionalCosts) || 0,
       salvageValue: Number(salvageValue) || 0,
-      usefulLifeYears: Number(usefulLifeYears) || 1,
+      usefulLifeYears: isRateBasis && rateIsValid ? 100 / rateValue : Number(usefulLifeYears) || 1,
+      depreciationInputMode: depreciationMethod === 'straight_line'
+        ? editingAsset && !editingAsset.depreciationInputMode && depreciationInputMode === 'years'
+          ? undefined
+          : depreciationInputMode
+        : undefined,
+      annualDepreciationRate: isRateBasis && rateIsValid ? rateValue : undefined,
       depreciationMethod,
       startDepreciationRule,
       totalEstimatedUnits: depreciationMethod === 'units_of_production' ? Number(totalEstimatedUnits) || 10000 : undefined,
@@ -456,20 +494,56 @@ export const AssetModal: React.FC<AssetModalProps> = ({
                 />
               </div>
 
-              {/* Useful Life Years */}
+              {/* Straight-line input basis; other methods retain their existing useful-life control. */}
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  العمر الإنتاجي (بالسنوات): <span className="text-rose-400">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  required
-                  value={usefulLifeYears}
-                  onChange={(e) => setUsefulLifeYears(e.target.value)}
-                  className="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-100 font-mono-numbers focus:border-sky-500 focus:outline-none"
-                />
+                {depreciationMethod === 'straight_line' && (
+                  <div className="mb-2">
+                    <label className="block text-xs font-medium text-slate-300 mb-1">أساس إدخال القسط الثابت:</label>
+                    <select
+                      value={depreciationInputMode}
+                      onChange={(e) => setDepreciationInputMode(e.target.value as 'years' | 'rate')}
+                      className="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-100 focus:border-sky-500 focus:outline-none"
+                    >
+                      <option value="years">العمر الإنتاجي بالسنوات</option>
+                      <option value="rate">نسبة سنوية من القيمة القابلة للإهلاك</option>
+                    </select>
+                  </div>
+                )}
+                {depreciationMethod === 'straight_line' && depreciationInputMode === 'rate' ? (
+                  <>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      نسبة الإهلاك السنوية (%): <span className="text-rose-400">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="100"
+                      step="any"
+                      required
+                      value={annualDepreciationRate}
+                      onChange={(e) => setAnnualDepreciationRate(e.target.value)}
+                      className={`w-full rounded-xl bg-slate-800 border px-3 py-2 text-xs text-slate-100 font-mono-numbers focus:outline-none ${rateIsValid ? 'border-slate-700 focus:border-sky-500' : 'border-rose-500 focus:border-rose-500'}`}
+                    />
+                    <p className={`mt-1 text-[10px] ${rateIsValid ? 'text-slate-400' : 'text-rose-400'}`}>
+                      تُضرب النسبة في (التكلفة الرأسمالية − القيمة التخريدية). النطاق 0.1%–100%؛ العمر المكافئ: {rateIsValid ? formatNumber(equivalentLifeYears) : '—'} سنة.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      العمر الإنتاجي (بالسنوات): <span className="text-rose-400">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      required
+                      value={usefulLifeYears}
+                      onChange={(e) => setUsefulLifeYears(e.target.value)}
+                      className="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-xs text-slate-100 font-mono-numbers focus:border-sky-500 focus:outline-none"
+                    />
+                  </>
+                )}
               </div>
             </div>
 
@@ -591,17 +665,17 @@ export const AssetModal: React.FC<AssetModalProps> = ({
               </div>
 
               <div className="bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
-                <div className="text-[11px] text-slate-400">قسط إهلاك السنة الأولى (تقريبي):</div>
-                <div className="text-sm font-bold text-amber-400 font-mono-numbers mt-0.5">
-                  {formatNumber(previewAnnualExpense)} {currency}
-                </div>
+                  <div className="text-[11px] text-slate-400">مصروف السنة الأولى بعد التناسب:</div>
+                  <div className="text-sm font-bold text-amber-400 font-mono-numbers mt-0.5">
+                  {formatNumber(previewFirstYearExpense)} {currency}
+                  </div>
               </div>
 
               <div className="bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
-                <div className="text-[11px] text-slate-400">قسط الإهلاك الشهري:</div>
-                <div className="text-sm font-bold text-purple-300 font-mono-numbers mt-0.5">
-                  {formatNumber(previewAnnualExpense / 12)} {currency}
-                </div>
+                  <div className="text-[11px] text-slate-400">المصروف السنوي الكامل:</div>
+                  <div className="text-sm font-bold text-purple-300 font-mono-numbers mt-0.5">
+                  {formatNumber(previewAnnualExpense)} {currency}
+                  </div>
               </div>
             </div>
           </div>

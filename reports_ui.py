@@ -204,7 +204,7 @@ class CustomExcelDialog(tk.Toplevel):
     DEFAULT_COLUMNS = {
         "code", "accountCode", "name", "category", "department", "totalCost",
         "openingBookValue", "additions", "periodExpense", "disposalBookValue",
-        "gainLoss", "endingBookValue",
+        "gainLoss", "endingBookValue", "inputBasisLabel", "annualDepreciationRate",
     }
 
     def __init__(self, parent: ReportsDialog, assets: list[dict[str, Any]], report: dict[str, Any], company: str, currency: str, filters: dict[str, str]):

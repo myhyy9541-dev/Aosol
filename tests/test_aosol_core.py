@@ -24,6 +24,34 @@ class DepreciationTests(unittest.TestCase):
         self.assertAlmostEqual(sum(row["expense"] for row in schedule), 10000, places=2)
         self.assertAlmostEqual(schedule[-1]["ending"], 2000, places=2)
 
+    def test_rate_schedule_uses_capitalized_cost_basis_partial_first_year_and_final_settlement(self):
+        asset = sample()
+        asset.update(purchaseCost=12000, additionalCosts=3000, salvageValue=2000,
+                     usefulLifeYears=5, depreciationInputMode="rate", annualDepreciationRate=20,
+                     inServiceDate="2024-02-01")
+        schedule = depreciation_schedule(asset)
+        self.assertAlmostEqual(schedule[0]["beginning"] - schedule[0]["ending"], 13000 * 0.2 * 11 / 12, places=6)
+        self.assertEqual(len(schedule), 6)
+        self.assertAlmostEqual(13000 * 0.2, 2600, places=2)
+        self.assertAlmostEqual(schedule[1]["expense"], 2600, places=6)
+        self.assertAlmostEqual(sum(row["expense"] for row in schedule), 13000, places=6)
+        self.assertAlmostEqual(schedule[-1]["expense"], 13000 - sum(row["expense"] for row in schedule[:-1]), places=6)
+        self.assertAlmostEqual(schedule[-1]["ending"], 2000, places=6)
+        self.assertTrue(all(row["ending"] >= 2000 for row in schedule))
+        self.assertTrue(all(row["accumulated"] <= 13000 for row in schedule))
+
+    def test_invalid_rate_is_rejected_by_schedule(self):
+        for rate in (0.09, 100.01, float("inf"), float("nan")):
+            asset = sample()
+            asset.update(depreciationInputMode="rate", annualDepreciationRate=rate)
+            with self.assertRaises(ValueError):
+                depreciation_schedule(asset)
+
+    def test_legacy_asset_without_new_fields_keeps_exact_year_schedule(self):
+        legacy = sample()
+        explicit_years = dict(legacy, depreciationInputMode="years")
+        self.assertEqual(depreciation_schedule(legacy), depreciation_schedule(explicit_years))
+
     def test_half_month_rule_rolls_late_service_date_forward(self):
         asset = sample()
         asset["inServiceDate"] = "2024-01-16"
@@ -61,6 +89,22 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(restored.all()[0]["name"], "أصل للاختبار")
             restored.close()
 
+    def test_backup_restore_preserves_new_depreciation_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = AssetStore(Path(directory) / "source.db")
+            rate_asset = sample()
+            rate_asset.update(depreciationInputMode="rate", annualDepreciationRate=20, usefulLifeYears=5.0)
+            source.save(rate_asset)
+            backup = source.backup_data()
+            source.close()
+            target = AssetStore(Path(directory) / "target.db")
+            self.assertEqual(target.restore(backup, replace=True), 1)
+            restored = target.all()[0]
+            self.assertEqual(restored["depreciationInputMode"], "rate")
+            self.assertEqual(restored["annualDepreciationRate"], 20)
+            self.assertEqual(restored["usefulLifeYears"], 5.0)
+            target.close()
+
     def test_category_catalog_persists_renames_assets_and_guards_deletion(self):
         with tempfile.TemporaryDirectory() as directory:
             store = AssetStore(Path(directory) / "aosol.db")
@@ -92,6 +136,7 @@ class StoreTests(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows[0]["code"], "AST-TEST")
             self.assertEqual(rows[0]["name"], "أصل للاختبار")
+            self.assertEqual(rows[0]["depreciationInputMode"], "years")
 
     def test_csv_export_neutralizes_formula_like_text(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,6 +161,17 @@ class StoreTests(unittest.TestCase):
             self.assertGreaterEqual(sheet.cell(2, 8).value, 2000)
             self.assertLessEqual(sheet.cell(2, 8).value, 10000)
 
+    def test_core_xlsx_export_includes_depreciation_mode_and_rate(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rate-assets.xlsx"
+            asset = sample()
+            asset.update(depreciationInputMode="rate", annualDepreciationRate=20, usefulLifeYears=5.0)
+            export_xlsx(path, [asset], "ريال يمني")
+            sheet = load_workbook(path, data_only=True).active
+            self.assertEqual(sheet.cell(2, 10).value, "rate")
+            self.assertEqual(sheet.cell(2, 11).value, 20)
+
     def test_excel_export_stores_formula_like_text_as_plain_text(self):
         from openpyxl import load_workbook
         with tempfile.TemporaryDirectory() as directory:
@@ -127,8 +183,8 @@ class StoreTests(unittest.TestCase):
             sheet = load_workbook(path, data_only=False).active
             self.assertEqual(sheet.cell(2, 2).value, payload)
             self.assertEqual(sheet.cell(2, 2).data_type, "s")
-            self.assertEqual(sheet.cell(2, 13).value, "@SUM(1,1)")
-            self.assertEqual(sheet.cell(2, 13).data_type, "s")
+            self.assertEqual(sheet.cell(2, 15).value, "@SUM(1,1)")
+            self.assertEqual(sheet.cell(2, 15).data_type, "s")
 
 
 if __name__ == "__main__":

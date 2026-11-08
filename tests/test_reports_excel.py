@@ -101,6 +101,73 @@ class ExcelImportExportTests(unittest.TestCase):
             self.assertEqual(batch["assets"][0]["department"], "الإدارة العامة")
             self.assertEqual(batch["assets"][0]["accountCode"], "1500")
 
+    def test_template_rate_mode_conditional_validations_and_rate_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "rate-template.xlsx"
+            export_import_template(path)
+            workbook = load_workbook(path)
+            sheet = workbook["قالب الأصول"]
+            custom_formulas = [dv.formula1 for dv in sheet.data_validations.dataValidation if dv.type == "custom"]
+            self.assertGreaterEqual(len(custom_formulas), 2)
+            self.assertTrue(any("0.1" in formula and "100" in formula for formula in custom_formulas))
+            self._write_template_row(sheet, 2, self._valid_values(depreciationInputMode="rate", annualDepreciationRate=20, usefulLifeYears=None))
+            workbook.save(path)
+            batch = parse_import_file(path)
+            self.assertEqual(batch["validCount"], 1, batch["issues"])
+            rate_asset = batch["assets"][0]
+            self.assertEqual(rate_asset["depreciationInputMode"], "rate")
+            self.assertEqual(rate_asset["annualDepreciationRate"], 20)
+            self.assertEqual(rate_asset["usefulLifeYears"], 5)
+
+    def test_invalid_rate_values_are_rejected_during_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid-rate.xlsx"
+            for invalid_rate in (0.09, 100.01, "not-a-rate"):
+                export_import_template(path)
+                workbook = load_workbook(path)
+                self._write_template_row(workbook["قالب الأصول"], 2, self._valid_values(
+                    depreciationInputMode="rate", annualDepreciationRate=invalid_rate, usefulLifeYears=None,
+                ))
+                workbook.save(path)
+                batch = parse_import_file(path)
+                self.assertEqual(batch["validCount"], 0)
+                self.assertEqual(batch["issueCount"], 1)
+                self.assertIn("المعدل", batch["issues"][0]["reason"])
+
+    def test_web_template_rate_mode_imports_without_losing_basis(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "web-template.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append([
+                "كود الأصل (اختياري)", "اسم الأصل (إلزامي)", "تصنيف وفئة الأصل (إلزامي)",
+                "تاريخ الشراء (YYYY-MM-DD)", "تاريخ بدء التشغيل (YYYY-MM-DD)", "تكلفة الشراء الأصلية",
+                "تكاليف إضافية (نقل وتركيب)", "قيمة الخردة / النفاية", "أساس إدخال القسط الثابت (years أو rate)",
+                "معدل الإهلاك السنوي من القيمة القابلة للإهلاك % (0.1 إلى 100)", "العمر الإنتاجي (سنوات)",
+                "طريقة الإهلاك", "سياسة بدء الإهلاك (قاعدة 15 يوم)",
+            ])
+            sheet.append([
+                "AST-WEB-1", "أصل ويب", "المباني والإنشاءات", "2024-01-01", "2024-01-01", 12000,
+                100, 2000, "rate", 20, 5, "القسط الثابت", "منتصف الشهر (١–١٥)",
+            ])
+            workbook.save(path)
+            batch = parse_import_file(path)
+            self.assertEqual(batch["validCount"], 1, batch["issues"])
+            self.assertEqual(batch["assets"][0]["depreciationInputMode"], "rate")
+            self.assertEqual(batch["assets"][0]["annualDepreciationRate"], 20)
+
+    def test_python_asset_register_round_trip_preserves_rate_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "register.xlsx"
+            asset = sample(additionalCosts=100, depreciationInputMode="rate", annualDepreciationRate=20)
+            export_assets_workbook(path, [asset], "شركة الاختبار", "ريال يمني")
+            batch = parse_import_file(path)
+            self.assertEqual(batch["validCount"], 1, batch["issues"])
+            self.assertEqual(batch["assets"][0]["depreciationInputMode"], "rate")
+            self.assertEqual(batch["assets"][0]["annualDepreciationRate"], 20)
+
     def test_custom_category_is_in_excel_dropdown_and_imported(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "custom-categories.xlsx"
@@ -147,6 +214,56 @@ class ExcelImportExportTests(unittest.TestCase):
             self.assertTrue(all(period[s].sheet_view.rightToLeft for s in period.sheetnames))
             self.assertEqual(period["التفاصيل"].cell(6, 3).value, "أصل اختباري")
             self.assertTrue(period["الملخص التنفيذي"]._charts)
+
+    def test_rate_mode_is_carried_through_csv_excel_and_period_reports(self):
+        asset = sample(purchaseCost=12000, additionalCosts=3000, salvageValue=2000,
+                       depreciationInputMode="rate", annualDepreciationRate=20,
+                       usefulLifeYears=5.0)
+        report = build_asset_report([asset], date(2025, 1, 1), date(2025, 12, 31))
+        headers, rows, _ = report_view(report, "الإهلاك للفترة")
+        self.assertIn("أساس الإدخال", headers)
+        self.assertIn("المعدل السنوي من القيمة القابلة للإهلاك (%)", headers)
+        self.assertIn("نسبة سنوية من القيمة القابلة للإهلاك", rows[0])
+        self.assertIn(20, rows[0])
+        movement_headers, movement_rows, _ = report_view(report, "حركة الأصول للفترة")
+        self.assertIn("أساس الإهلاك", movement_headers)
+        self.assertIn(20, movement_rows[0])
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path = Path(directory) / "assets.csv"
+            from aosol_core import export_csv
+            export_csv(csv_path, [asset])
+            with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+                csv_row = next(csv.DictReader(stream))
+            self.assertEqual(csv_row["depreciationInputMode"], "rate")
+            self.assertEqual(float(csv_row["annualDepreciationRate"]), 20)
+            imported = parse_import_file(csv_path)
+            self.assertEqual(imported["validCount"], 1, imported["issues"])
+            self.assertEqual(imported["assets"][0]["annualDepreciationRate"], 20)
+
+            register_path = Path(directory) / "register.xlsx"
+            report_path = Path(directory) / "period.xlsx"
+            custom_path = Path(directory) / "custom.xlsx"
+            export_assets_workbook(register_path, [asset], "شركة الاختبار", "ريال يمني")
+            export_report_workbook(report_path, report, "شركة الاختبار", "ريال يمني", "الإهلاك للفترة")
+            from aosol_excel import export_custom_period_workbook
+            export_custom_period_workbook(
+                custom_path, [asset], "شركة الاختبار", "ريال يمني", date(2025, 1, 1), date(2025, 12, 31),
+                columns=["code", "inputBasisLabel", "annualDepreciationRate"],
+                include_overall=False, include_periods=False, include_details=True,
+                include_accounts=False, include_categories=False, include_departments=False,
+            )
+            register = load_workbook(register_path, data_only=True)
+            self.assertEqual(register["سجل الأصول"].cell(6, 11).value, "النسبة من القيمة القابلة للإهلاك")
+            self.assertEqual(register["سجل الأصول"].cell(6, 12).value, 20)
+            self.assertEqual(register["جدول الإهلاك"].cell(6, 10).value, "النسبة من القيمة القابلة للإهلاك")
+            period = load_workbook(report_path, data_only=True)
+            period_headers = [period["التفاصيل"].cell(5, col).value for col in range(1, period["التفاصيل"].max_column + 1)]
+            rate_col = period_headers.index("المعدل السنوي من القيمة القابلة للإهلاك (%)") + 1
+            self.assertEqual(period["التفاصيل"].cell(6, rate_col).value, 20)
+            self.assertEqual(period["التفاصيل"].cell(6, rate_col).number_format, '0.0"%"')
+            custom = load_workbook(custom_path, data_only=True)["تفاصيل الأصول"]
+            self.assertEqual(custom.cell(6, 3).value, 20)
+            self.assertEqual(custom.cell(6, 3).number_format, '0.0"%"')
 
     def test_formula_like_asset_text_is_plain_text_in_all_report_exports(self):
         payload = '=HYPERLINK("https://example.invalid", "open")'

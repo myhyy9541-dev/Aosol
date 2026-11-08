@@ -36,7 +36,9 @@ TEMPLATE_COLUMNS = [
     ("purchaseCost", "تكلفة الشراء *", "money"),
     ("additionalCosts", "التكاليف الإضافية", "money"),
     ("salvageValue", "القيمة التخريدية", "money"),
-    ("usefulLifeYears", "العمر الإنتاجي (سنوات) *", "number"),
+    ("depreciationInputMode", "أساس إدخال الإهلاك", "input_mode"),
+    ("annualDepreciationRate", "المعدل السنوي من القيمة القابلة للإهلاك (%)", "percentage"),
+    ("usefulLifeYears", "العمر الإنتاجي (سنوات)", "number"),
     ("depreciationMethod", "طريقة الإهلاك *", "method"),
     ("startDepreciationRule", "قاعدة بدء الإهلاك", "rule"),
     ("status", "حالة الأصل", "status"),
@@ -66,16 +68,29 @@ for key, header, _kind in TEMPLATE_COLUMNS:
     ALIASES[key] = key
 ALIASES.update({
     "الكود": "code", "رمز الأصل": "code", "كود الأصل": "code", "asset code": "code", "code": "code",
+    "كود الأصل (اختياري)": "code", "اسم الأصل (إلزامي)": "name",
     "اسم الأصل": "name", "الاسم": "name", "asset name": "name", "name": "name",
+    "تصنيف وفئة الأصل (إلزامي)": "category", "الإدارة / القسم (إلزامي)": "department",
     "الفئة": "category", "التصنيف": "category", "category": "category",
+    "تاريخ الشراء (YYYY-MM-DD)": "purchaseDate", "تاريخ بدء التشغيل (YYYY-MM-DD)": "inServiceDate",
     "تاريخ الشراء": "purchaseDate", "purchase date": "purchaseDate", "تاريخ التشغيل": "inServiceDate", "تاريخ بدء التشغيل": "inServiceDate", "تاريخ الخدمة": "inServiceDate", "in service date": "inServiceDate",
+    "تاريخ بدء الخدمة": "inServiceDate",
+    "تكلفة الشراء الأصلية": "purchaseCost", "تكاليف إضافية (نقل وتركيب)": "additionalCosts", "قيمة الخردة / النفاية": "salvageValue",
+    "تكلفة الشراء": "purchaseCost", "التكاليف الإضافية": "additionalCosts", "القيمة التخريدية": "salvageValue",
     "التكلفة": "purchaseCost", "التكلفة التاريخية": "purchaseCost", "التكلفة الإجمالية": "purchaseCost", "purchase cost": "purchaseCost", "cost": "purchaseCost",
     "مصروفات إضافية": "additionalCosts", "تكاليف إضافية": "additionalCosts", "additional costs": "additionalCosts",
     "قيمة الخردة": "salvageValue", "الخردة": "salvageValue", "salvage value": "salvageValue",
     "العمر الإنتاجي": "usefulLifeYears", "العمر": "usefulLifeYears", "useful life years": "usefulLifeYears",
+    "العمر الإنتاجي (سنوات)": "usefulLifeYears", "طريقة الإهلاك": "depreciationMethod", "سياسة بدء الإهلاك (قاعدة 15 يوم)": "startDepreciationRule",
+    "أساس إدخال الإهلاك": "depreciationInputMode", "أساس إدخال القسط الثابت": "depreciationInputMode", "أساس إدخال القسط الثابت (years أو rate)": "depreciationInputMode", "نمط إدخال الإهلاك": "depreciationInputMode", "depreciation input mode": "depreciationInputMode",
+    "أساس الإدخال": "depreciationInputMode",
+    "المعدل السنوي (%)": "annualDepreciationRate", "المعدل السنوي من القيمة القابلة للإهلاك (%)": "annualDepreciationRate", "معدل الإهلاك السنوي من القيمة القابلة للإهلاك % (0.1 إلى 100)": "annualDepreciationRate", "معدل الإهلاك السنوي": "annualDepreciationRate", "annual depreciation rate": "annualDepreciationRate",
     "الطريقة": "depreciationMethod", "depreciation method": "depreciationMethod",
     "قاعدة بدء الإهلاك": "startDepreciationRule", "سياسة بدء الإهلاك": "startDepreciationRule",
+    "قاعدة البدء": "startDepreciationRule",
     "الحالة": "status", "status": "status", "الإدارة": "department", "القسم": "department", "department": "department",
+    "الموقع / الفرع": "location", "الموظف المسؤول (العهدة)": "custodian", "الرقم التسلسلي (Serial No)": "serialNumber", "المورد / الشركة البائعة": "supplier",
+    "إجمالي الوحدات المقدرة (لوحدات الإنتاج)": "totalEstimatedUnits", "الوحدات المنتجة حتى الآن": "producedUnitsToDate", "وحدة القياس": "unitOfMeasure",
     "الموقع": "location", "location": "location", "العهدة": "custodian", "المسؤول": "custodian", "custodian": "custodian",
     "الرقم التسلسلي": "serialNumber", "serial number": "serialNumber", "المورد": "supplier", "supplier": "supplier",
     "رقم الفاتورة": "invoiceNumber", "invoice number": "invoiceNumber", "ملاحظات": "notes", "notes": "notes",
@@ -206,12 +221,13 @@ def _style_title(sheet: Any, title: str, subtitle: str, last_col: int) -> None:
     sheet.freeze_panes = "A6"
 
 
-def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, header_row: int = 5, currency_columns: set[int] | None = None, percent_columns: set[int] | None = None, total_row: list[Any] | None = None) -> None:
+def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, header_row: int = 5, currency_columns: set[int] | None = None, percent_columns: set[int] | None = None, percentage_point_columns: set[int] | None = None, total_row: list[Any] | None = None) -> None:
     _Workbook, _load, _chart, _ref, _scale, _bars, Alignment, Border, Font, PatternFill, Side, _DV = _openpyxl()
     from openpyxl.utils import get_column_letter
     thin = Side(style="hair", color=BORDER)
     currency_columns = currency_columns or set()
     percent_columns = percent_columns or set()
+    percentage_point_columns = percentage_point_columns or set()
     for col, header in enumerate(headers, 1):
         cell = sheet.cell(header_row, col, header)
         cell.fill = PatternFill("solid", fgColor=NAVY_2)
@@ -230,6 +246,9 @@ def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, 
                 fill = PALE_GOLD if (row_idx - header_row) % 2 else "FFF9EA"
                 cell.number_format = '#,##0.00;[Red](#,##0.00);-'
                 cell.alignment = Alignment(horizontal="right", vertical="center")
+            elif col in percentage_point_columns:
+                cell.number_format = '0.0"%"'
+                cell.alignment = Alignment(horizontal="right", vertical="center")
             elif col in percent_columns:
                 cell.number_format = '0.0%'
                 cell.alignment = Alignment(horizontal="right", vertical="center")
@@ -237,7 +256,7 @@ def _write_data_table(sheet: Any, headers: list[str], rows: list[list[Any]], *, 
                 cell.alignment = Alignment(horizontal="right", vertical="center", wrap_text=True)
             cell.fill = PatternFill("solid", fgColor=fill)
             cell.border = Border(bottom=thin)
-            if isinstance(value, (int, float)) and col not in currency_columns:
+            if isinstance(value, (int, float)) and col not in currency_columns and col not in percentage_point_columns and col not in percent_columns:
                 cell.number_format = '#,##0.##'
             if isinstance(value, str) and ("خسارة" in value or value.startswith("-") or value.startswith("(") ):
                 cell.font = Font(name="Arial", size=9, color="B42318")
@@ -303,7 +322,7 @@ def export_import_template(path: str | Path, categories: list[str] | None = None
             cell = sheet.cell(row, col)
             if kind == "date":
                 cell.number_format = "yyyy-mm-dd"
-            elif kind in ("money", "number"):
+            elif kind in ("money", "number", "percentage"):
                 cell.number_format = "#,##0.00"
     columns = {field: index for index, (field, _header, _kind) in enumerate(TEMPLATE_COLUMNS, 1)}
     method_values = ",".join(METHODS.values())
@@ -344,13 +363,33 @@ def export_import_template(path: str | Path, categories: list[str] | None = None
         sheet.add_data_validation(dv)
         letter = __import__("openpyxl").utils.get_column_letter(columns[field])
         dv.add(f"{letter}2:{letter}501")
-    for field in ("purchaseCost", "additionalCosts", "salvageValue", "usefulLifeYears", "totalEstimatedUnits", "producedUnitsToDate", "salePrice", "disposalCosts", "bookValueAtDisposal", "accumulatedAtDisposal"):
+    mode_letter = __import__("openpyxl").utils.get_column_letter(columns["depreciationInputMode"])
+    life_letter = __import__("openpyxl").utils.get_column_letter(columns["usefulLifeYears"])
+    rate_letter = __import__("openpyxl").utils.get_column_letter(columns["annualDepreciationRate"])
+    for field in ("purchaseCost", "additionalCosts", "salvageValue", "totalEstimatedUnits", "producedUnitsToDate", "salePrice", "disposalCosts", "bookValueAtDisposal", "accumulatedAtDisposal"):
         dv = DataValidation(type="decimal", operator="greaterThanOrEqual", formula1="0", allow_blank=(field != "purchaseCost"))
         dv.error = "أدخل رقمًا غير سالب."
         dv.showErrorMessage = True
         sheet.add_data_validation(dv)
         letter = __import__("openpyxl").utils.get_column_letter(columns[field])
         dv.add(f"{letter}2:{letter}501")
+    life_dv = DataValidation(type="custom", formula1=f'=OR(${mode_letter}2="rate",AND(OR(${mode_letter}2="years",${mode_letter}2=""),ISNUMBER(${life_letter}2),${life_letter}2>=1,MOD(${life_letter}2,1)=0))', allow_blank=False)
+    life_dv.errorTitle = "العمر الإنتاجي غير صالح"
+    life_dv.error = "أدخل عمرًا صحيحًا لا يقل عن سنة عندما يكون أساس الإهلاك years."
+    life_dv.showErrorMessage = True
+    sheet.add_data_validation(life_dv)
+    life_dv.add(f"{life_letter}2:{life_letter}501")
+    rate_dv = DataValidation(type="custom", formula1=f'=OR(${mode_letter}2<>"rate",AND(ISNUMBER(${rate_letter}2),${rate_letter}2>=0.1,${rate_letter}2<=100))', allow_blank=False)
+    rate_dv.errorTitle = "المعدل السنوي غير صالح"
+    rate_dv.error = "عند اختيار rate أدخل نسبة من 0.1 إلى 100."
+    rate_dv.showErrorMessage = True
+    sheet.add_data_validation(rate_dv)
+    rate_dv.add(f"{rate_letter}2:{rate_letter}501")
+    mode_dv = DataValidation(type="list", formula1='"years,rate"', allow_blank=True)
+    mode_dv.error = "اختر years أو rate."
+    mode_dv.showErrorMessage = True
+    sheet.add_data_validation(mode_dv)
+    mode_dv.add(f"{mode_letter}2:{mode_letter}501")
     instructions = workbook.create_sheet("دليل الاستخدام")
     instructions.sheet_view.rightToLeft = True
     instructions.sheet_view.showGridLines = False
@@ -369,7 +408,8 @@ def export_import_template(path: str | Path, categories: list[str] | None = None
         ("الحقول المطلوبة", "الحقول التي تنتهي بعلامة * مطلوبة. لا تغيّر أسماء الأعمدة ولا تحذف ورقة قالب الأصول."),
         ("التواريخ", "استخدم صيغة YYYY-MM-DD (مثال 2026-01-31). يقبل الاستيراد أيضًا خلايا Excel المعرفة كتاريخ."),
         ("القيم المنسدلة", "اختر التصنيف وطريقة الإهلاك وقاعدة البدء والحالة من القوائم. يعكس قالب التصنيفات الحالية في التطبيق."),
-        ("المبالغ والأعمار", "أدخل أرقامًا غير سالبة من دون كتابة رمز العملة. تكلفة الشراء يجب أن تكون أكبر من صفر، والعمر سنة أو أكثر."),
+        ("أساس إهلاك القسط الثابت", "اختر years لإدخال عمر صحيح لا يقل عن سنة، أو rate لإدخال معدل سنوي من 0.1% إلى 100% يُضرب في (التكلفة الرأسمالية شامل التكاليف الإضافية − القيمة التخريدية). عند اختيار rate يحسب التطبيق العمر المكافئ = 100 / المعدل. للأصول القديمة التي لا تحتوي على أساس إدخال، يُعامل الحقل كـ years."),
+        ("المبالغ والأعمار", "أدخل أرقامًا غير سالبة من دون كتابة رمز العملة. تكلفة الشراء يجب أن تكون أكبر من صفر؛ العمر مطلوب وصحيح عند اختيار years فقط."),
         ("الوحدات", "املأ الوحدات المقدرة والمنتجة عند اختيار طريقة وحدات الإنتاج. لا يحتسب التقرير مصروف فترة دقيقًا دون سجل وحدات مؤرخ."),
         ("التكرارات والأخطاء", "يفحص التطبيق رمز الأصل في الملف وقاعدة البيانات. تظهر معاينة وأسباب الصفوف المرفوضة قبل حفظ أي أصل."),
         ("تفاصيل الاستبعاد", "إذا اخترت حالة «مستبعد»، أكمل تاريخ الاستبعاد والقيمة الدفترية ومجمع الإهلاك ونوع الاستبعاد."),
@@ -472,25 +512,40 @@ def parse_import_file(path: str | Path, existing_codes: set[str] | list[str] | t
         if parsed.get("purchaseDate") and parsed.get("inServiceDate") and parsed["inServiceDate"] < parsed["purchaseDate"]:
             problems.append("تاريخ بدء الخدمة يسبق تاريخ الشراء")
 
-        numeric_fields = ("purchaseCost", "additionalCosts", "salvageValue", "usefulLifeYears", "totalEstimatedUnits", "producedUnitsToDate", "salePrice", "disposalCosts", "bookValueAtDisposal", "accumulatedAtDisposal")
+        input_mode_raw = _normalise_header(raw.get("depreciationInputMode"))
+        if input_mode_raw in {"النسبة السنوية", "النسبة من القيمة القابلة للإهلاك", "نسبة من القيمة القابلة للإهلاك"}:
+            input_mode_raw = "rate"
+        elif input_mode_raw == "العمر بالسنوات":
+            input_mode_raw = "years"
+        mode_values = {"years": "years", "rate": "rate", "سنوات": "years", "السنوات": "years", "عمر": "years", "نسبة": "rate", "نسبة سنوية": "rate", "نسبة سنوية من القيمة القابلة للإهلاك": "rate", "معدل": "rate"}
+        input_mode = mode_values.get(input_mode_raw, "years" if not input_mode_raw else "")
+        if not input_mode:
+            problems.append("أساس إدخال الإهلاك يجب أن يكون years أو rate")
+            input_mode = "years"
+
+        numeric_fields = ("purchaseCost", "additionalCosts", "salvageValue", "usefulLifeYears", "annualDepreciationRate", "totalEstimatedUnits", "producedUnitsToDate", "salePrice", "disposalCosts", "bookValueAtDisposal", "accumulatedAtDisposal")
         for field in numeric_fields:
             value = raw.get(field)
-            required = field in ("purchaseCost", "usefulLifeYears")
+            required = field == "purchaseCost"
             try:
-                number = _parse_number(value, default=None if required else 0.0)
+                number = _parse_number(value, default=None if (required or field in ("usefulLifeYears", "annualDepreciationRate")) else 0.0)
                 if number is None:
-                    raise ValueError("الحقل مطلوب")
+                    if required:
+                        raise ValueError("الحقل مطلوب")
+                    continue
                 if number < 0:
                     raise ValueError("القيمة لا تقبل السالب")
                 if field == "purchaseCost" and number <= 0:
                     raise ValueError("يجب أن تكون تكلفة الشراء أكبر من صفر")
-                if field == "usefulLifeYears" and (number < 1 or not number.is_integer()):
+                if field == "usefulLifeYears" and input_mode == "years" and (number < 1 or not number.is_integer()):
                     raise ValueError("أدخل عمرًا صحيحًا لا يقل عن سنة")
+                if field == "annualDepreciationRate" and not 0.1 <= number <= 100:
+                    raise ValueError("يجب أن يكون المعدل بين 0.1 و100 بالمئة")
                 if field == "producedUnitsToDate" and raw.get("totalEstimatedUnits") not in (None, ""):
                     estimated = _parse_number(raw.get("totalEstimatedUnits"), default=0.0) or 0.0
                     if number > estimated:
                         raise ValueError("الوحدات المنتجة تتجاوز إجمالي الوحدات المقدرة")
-                parsed[field] = int(number) if field == "usefulLifeYears" else number
+                parsed[field] = int(number) if field == "usefulLifeYears" and input_mode == "years" else number
             except ValueError as exc:
                 field_title = next((label.replace(" *", "") for code_key, label, _kind in TEMPLATE_COLUMNS if code_key == field), field)
                 problems.append(f"{field_title}: {exc}")
@@ -510,6 +565,17 @@ def parse_import_file(path: str | Path, existing_codes: set[str] | list[str] | t
             problems.append("طريقة الإهلاك مطلوبة ويجب اختيارها من القالب")
         else:
             parsed["depreciationMethod"] = method
+        parsed["depreciationInputMode"] = input_mode
+        if input_mode == "rate":
+            if method and method != "straight_line":
+                problems.append("إدخال المعدل السنوي متاح لطريقة القسط الثابت فقط")
+            rate = parsed.get("annualDepreciationRate")
+            if rate is None:
+                problems.append("المعدل السنوي مطلوب عند اختيار rate")
+            elif 0.1 <= rate <= 100:
+                parsed["usefulLifeYears"] = 100.0 / rate
+        elif "usefulLifeYears" not in parsed:
+            problems.append("العمر الإنتاجي مطلوب عند اختيار years")
         rule_raw = str(raw.get("startDepreciationRule") or "mid_month_15").strip()
         parsed["startDepreciationRule"] = rule_by_norm.get(_normalise_header(rule_raw), "mid_month_15")
         status_raw = str(raw.get("status") or "نشط").strip()
@@ -650,13 +716,16 @@ def export_assets_workbook(path: str | Path, assets: list[dict[str, Any]], compa
     # Detailed register
     sheet = workbook.create_sheet("سجل الأصول")
     sheet.sheet_properties.tabColor = NAVY_2
-    _style_title(sheet, "سجل الأصول الثابتة", f"{company}  |  العملة: {currency}  |  تقرير حتى {now.isoformat()}", 22)
-    headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "تاريخ الشراء", "تاريخ بدء الخدمة", "تكلفة الشراء", "تكاليف إضافية", "التكلفة الرأسمالية", "القيمة التخريدية", "العمر الإنتاجي", "طريقة الإهلاك", "قاعدة البدء", "الحالة", "الإدارة", "الموقع", "العهدة", "الرقم التسلسلي", "المورد", "رقم الفاتورة", "مجمع الإهلاك", "صافي القيمة الدفترية", "ملاحظات"]
+    _style_title(sheet, "سجل الأصول الثابتة", f"{company}  |  العملة: {currency}  |  تقرير حتى {now.isoformat()}", 25)
+    headers = ["رمز الأصل", "رمز الحساب", "اسم الأصل", "الفئة", "تاريخ الشراء", "تاريخ بدء الخدمة", "تكلفة الشراء", "تكاليف إضافية", "التكلفة الرأسمالية", "القيمة التخريدية", "أساس الإدخال", "المعدل السنوي من القيمة القابلة للإهلاك (%)", "العمر الإنتاجي", "طريقة الإهلاك", "قاعدة البدء", "الحالة", "الإدارة", "الموقع", "العهدة", "الرقم التسلسلي", "المورد", "رقم الفاتورة", "مجمع الإهلاك", "صافي القيمة الدفترية", "ملاحظات"]
     rows = []
     for asset in sorted(assets, key=lambda item: (str(item.get("category", "")), str(item.get("name", "")))):
         val = valuation(asset)
-        rows.append([asset.get("code"), asset.get("accountCode"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), money(asset.get("purchaseCost")), money(asset.get("additionalCosts")), val["totalCost"], money(asset.get("salvageValue")), asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), asset.get("depreciationMethod")), RULE_LABELS.get(asset.get("startDepreciationRule"), "منتصف الشهر (١–١٥)"), STATUSES.get(asset.get("status"), "نشط"), asset.get("department"), asset.get("location"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"), asset.get("invoiceNumber"), val["accumulatedDepreciation"], val["netBookValue"], asset.get("notes")])
-    _write_data_table(sheet, headers, rows, header_row=5, currency_columns={7, 8, 9, 10, 21, 22})
+        is_rate = asset.get("depreciationMethod", "straight_line") == "straight_line" and asset.get("depreciationInputMode", "years") == "rate"
+        life = money(asset.get("usefulLifeYears"))
+        annual_rate = money(asset.get("annualDepreciationRate")) if is_rate else (100.0 / life if asset.get("depreciationMethod", "straight_line") == "straight_line" and life > 0 else None)
+        rows.append([asset.get("code"), asset.get("accountCode"), asset.get("name"), asset.get("category"), asset.get("purchaseDate"), asset.get("inServiceDate"), money(asset.get("purchaseCost")), money(asset.get("additionalCosts")), val["totalCost"], money(asset.get("salvageValue")), "النسبة من القيمة القابلة للإهلاك" if is_rate else "العمر بالسنوات", annual_rate, asset.get("usefulLifeYears"), METHODS.get(asset.get("depreciationMethod"), asset.get("depreciationMethod")), RULE_LABELS.get(asset.get("startDepreciationRule"), "منتصف الشهر (١–١٥)"), STATUSES.get(asset.get("status"), "نشط"), asset.get("department"), asset.get("location"), asset.get("custodian"), asset.get("serialNumber"), asset.get("supplier"), asset.get("invoiceNumber"), val["accumulatedDepreciation"], val["netBookValue"], asset.get("notes")])
+    _write_data_table(sheet, headers, rows, header_row=5, currency_columns={7, 8, 9, 10, 23, 24}, percentage_point_columns={12})
     sheet.freeze_panes = "A6"
     if rows:
         sheet.conditional_formatting.add(f"U6:U{5 + len(rows)}", DataBarRule(start_type="min", end_type="max", color=TEAL))
@@ -676,14 +745,17 @@ def export_assets_workbook(path: str | Path, assets: list[dict[str, Any]], compa
     # Annual schedule, including valuation at the moment of export.
     schedule_sheet = workbook.create_sheet("جدول الإهلاك")
     schedule_sheet.sheet_properties.tabColor = "6B86A5"
-    _style_title(schedule_sheet, "الجداول السنوية للإهلاك", f"{company}  |  جداول تقديرية بحسب بيانات العمر والطريقة في سجل الأصول  |  العملة: {currency}", 9)
-    schedule_headers = ["رمز الأصل", "اسم الأصل", "الفئة", "السنة / الفترة", "القيمة أول المدة", "مصروف الإهلاك", "مجمع الإهلاك", "القيمة آخر المدة", "طريقة الإهلاك"]
+    _style_title(schedule_sheet, "الجداول السنوية للإهلاك", f"{company}  |  جداول تقديرية بحسب بيانات الأساس والطريقة في سجل الأصول  |  العملة: {currency}", 11)
+    schedule_headers = ["رمز الأصل", "اسم الأصل", "الفئة", "السنة / الفترة", "القيمة أول المدة", "مصروف الإهلاك", "مجمع الإهلاك", "القيمة آخر المدة", "طريقة الإهلاك", "أساس الإدخال", "المعدل السنوي من القيمة القابلة للإهلاك (%)"]
     schedule_rows: list[list[Any]] = []
     from aosol_core import depreciation_schedule
     for asset in assets:
+        is_rate = asset.get("depreciationMethod", "straight_line") == "straight_line" and asset.get("depreciationInputMode", "years") == "rate"
+        life = money(asset.get("usefulLifeYears"))
+        annual_rate = money(asset.get("annualDepreciationRate")) if is_rate else (100.0 / life if asset.get("depreciationMethod", "straight_line") == "straight_line" and life > 0 else None)
         for row in depreciation_schedule(asset):
-            schedule_rows.append([asset.get("code"), asset.get("name"), asset.get("category"), row["period"], row["beginning"], row["expense"], row["accumulated"], row["ending"], METHODS.get(asset.get("depreciationMethod"), "")])
-    _write_data_table(schedule_sheet, schedule_headers, schedule_rows, header_row=5, currency_columns={5, 6, 7, 8})
+            schedule_rows.append([asset.get("code"), asset.get("name"), asset.get("category"), row["period"], row["beginning"], row["expense"], row["accumulated"], row["ending"], METHODS.get(asset.get("depreciationMethod"), ""), "النسبة من القيمة القابلة للإهلاك" if is_rate else "العمر بالسنوات", annual_rate])
+    _write_data_table(schedule_sheet, schedule_headers, schedule_rows, header_row=5, currency_columns={5, 6, 7, 8}, percentage_point_columns={11})
     schedule_sheet.freeze_panes = "A6"
     workbook.properties.title = "سجل الأصول الثابتة - Aosol"
     workbook.properties.creator = "Aosol"
@@ -766,10 +838,13 @@ def export_report_workbook(path: str | Path, report: dict[str, Any], company: st
         _style_title(sheet, view_title, f"{company}  |  {report['fromDate']} إلى {report['toDate']}  |  العملة: {currency}", len(headers))
         rows = report_view(report, view_kind)[1]
         currency_cols = set()
+        percentage_point_cols = set()
         for index, header in enumerate(headers, 1):
-            if any(label in header for label in ("قيمة", "تكلفة", "رصيد", "الإضافات", "الإهلاك", "مصروف", "متحصلات", "الربح", "الخسارة")):
+            if "المعدل السنوي" in header:
+                percentage_point_cols.add(index)
+            elif any(label in header for label in ("قيمة", "تكلفة", "رصيد", "الإضافات", "الإهلاك", "مصروف", "متحصلات", "الربح", "الخسارة")):
                 currency_cols.add(index)
-        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=currency_cols)
+        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=currency_cols, percentage_point_columns=percentage_point_cols)
         sheet.freeze_panes = "A6"
         if rows and "مصروف الإهلاك" in headers:
             col = headers.index("مصروف الإهلاك") + 1
@@ -797,7 +872,8 @@ CUSTOM_DETAIL_FIELDS: list[tuple[str, str]] = [
     ("disposalBookValue", "القيمة الدفترية المستبعدة"), ("proceeds", "متحصلات الاستبعاد"),
     ("disposalCosts", "تكاليف الاستبعاد"), ("gainLoss", "الربح / (الخسارة)"),
     ("endingBookValue", "صافي القيمة آخر المدة"), ("salvageValue", "القيمة التخريدية"),
-    ("usefulLifeYears", "العمر الإنتاجي (سنة)"), ("methodLabel", "طريقة الإهلاك"),
+    ("usefulLifeYears", "العمر الإنتاجي (سنة)"), ("inputBasisLabel", "أساس الإهلاك"),
+    ("annualDepreciationRate", "المعدل السنوي من القيمة القابلة للإهلاك (%)"), ("methodLabel", "طريقة الإهلاك"),
     ("statusLabel", "الحالة"), ("location", "الموقع"), ("custodian", "العهدة / المسؤول"),
     ("serialNumber", "الرقم التسلسلي"), ("supplier", "المورد"), ("invoiceNumber", "رقم الفاتورة"),
     ("expenseNote", "ملاحظة الإهلاك"),
@@ -806,6 +882,7 @@ CUSTOM_MONEY_FIELDS = {
     "totalCost", "openingBookValue", "additions", "periodExpense", "accumulatedDepreciation",
     "disposalBookValue", "proceeds", "disposalCosts", "gainLoss", "endingBookValue", "salvageValue",
 }
+CUSTOM_PERCENT_POINT_FIELDS = {"annualDepreciationRate"}
 GROUP_METRICS = [
     ("assetCount", "عدد الأصول"), ("totalCost", "التكلفة الإجمالية"),
     ("openingBookValue", "رصيد أول المدة"), ("additions", "الإضافات"),
@@ -943,7 +1020,7 @@ def export_custom_period_workbook(
         rows = [[row.get(key, "") for key in chosen_columns] for row in selected_rows]
         total_row = None
         if include_detail_total:
-            label_index = next((index for index, key in enumerate(chosen_columns) if key not in CUSTOM_MONEY_FIELDS and key != "usefulLifeYears"), None)
+            label_index = next((index for index, key in enumerate(chosen_columns) if key not in CUSTOM_MONEY_FIELDS and key not in ("usefulLifeYears", "annualDepreciationRate")), None)
             total_row = [
                 sum(float(row.get(key, 0) or 0) for row in selected_rows) if key in CUSTOM_MONEY_FIELDS
                 else "الإجمالي العام" if index == label_index
@@ -951,7 +1028,8 @@ def export_custom_period_workbook(
                 for index, key in enumerate(chosen_columns)
             ]
         currency_cols = {index for index, key in enumerate(chosen_columns, 1) if key in CUSTOM_MONEY_FIELDS}
-        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=currency_cols, total_row=total_row)
+        percent_point_cols = {index for index, key in enumerate(chosen_columns, 1) if key in CUSTOM_PERCENT_POINT_FIELDS}
+        _write_data_table(sheet, headers, rows, header_row=5, currency_columns=currency_cols, percentage_point_columns=percent_point_cols, total_row=total_row)
 
     def add_group_sheet(title: str, group_label: str, groups: list[dict[str, Any]], tab_color: str) -> None:
         sheet = workbook.create_sheet(title)

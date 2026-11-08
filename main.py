@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import tkinter as tk
 from datetime import date, datetime
@@ -695,15 +696,19 @@ class AssetDialog(tk.Toplevel):
         form_scroll.pack(fill="both", expand=True, padx=6, pady=6)
         form = form_scroll.content
         form.configure(padx=18, pady=14)
-        defaults: dict[str, Any] = asset or {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "accountCode": "", "name": "", "category": parent.categories[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
+        defaults: dict[str, Any] = dict(asset) if asset else {"code": f"AST-{datetime.now().strftime('%H%M%S')}", "accountCode": "", "name": "", "category": parent.categories[0], "purchaseDate": date.today().isoformat(), "inServiceDate": date.today().isoformat(), "purchaseCost": "", "additionalCosts": 0, "salvageValue": 0, "usefulLifeYears": 5, "depreciationMethod": "straight_line", "depreciationInputMode": "rate", "annualDepreciationRate": 20, "startDepreciationRule": "mid_month_15", "status": "active", "department": "", "location": "", "custodian": "", "serialNumber": "", "supplier": "", "invoiceNumber": "", "notes": "", "totalEstimatedUnits": 10000, "producedUnitsToDate": 0}
+        defaults.setdefault("depreciationInputMode", "years")
+        defaults.setdefault("annualDepreciationRate", "")
         self.vars: dict[str, tk.Variable] = {}
         fields = [
             ("code", "رمز الأصل *", "entry"), ("accountCode", "رمز الحساب المحاسبي", "entry"), ("name", "اسم الأصل *", "entry"), ("category", "التصنيف", "category"), ("purchaseDate", "تاريخ الشراء", "entry"),
             ("inServiceDate", "تاريخ بدء التشغيل", "entry"), ("purchaseCost", f"تكلفة الشراء ({currency}) *", "entry"), ("additionalCosts", "تكاليف إضافية", "entry"), ("salvageValue", "القيمة التخريدية", "entry"),
-            ("usefulLifeYears", "العمر الإنتاجي (سنة)", "entry"), ("depreciationMethod", "طريقة الإهلاك", "method"), ("startDepreciationRule", "بداية الإهلاك", "rule"), ("status", "حالة الأصل", "status"),
+            ("depreciationInputMode", "أساس إدخال القسط الثابت", "input_mode"), ("usefulLifeYears", "العمر الإنتاجي (سنة)", "entry"), ("annualDepreciationRate", "النسبة السنوية من القيمة القابلة للإهلاك (%)", "entry"),
+            ("depreciationMethod", "طريقة الإهلاك", "method"), ("startDepreciationRule", "بداية الإهلاك", "rule"), ("status", "حالة الأصل", "status"),
             ("department", "الإدارة / القسم", "entry"), ("location", "الموقع", "entry"), ("custodian", "المسؤول / العهدة", "entry"), ("supplier", "المورد", "entry"),
             ("invoiceNumber", "رقم الفاتورة", "entry"), ("serialNumber", "الرقم التسلسلي", "entry"), ("totalEstimatedUnits", "إجمالي الوحدات المقدرة", "entry"), ("producedUnitsToDate", "الوحدات المنتجة حتى الآن", "entry"),
         ]
+        self._depreciation_field_cells: dict[str, tk.Frame] = {}
         for idx, (key, label, kind) in enumerate(fields):
             row, col = divmod(idx, 2)
             cell = tk.Frame(form, bg=WHITE)
@@ -715,8 +720,14 @@ class AssetDialog(tk.Toplevel):
                 control: tk.Widget = ttk.Combobox(cell, textvariable=variable, values=parent.categories, state="readonly", justify="right", font=("Tahoma", 9))
             elif kind == "method":
                 control = ttk.Combobox(cell, textvariable=variable, values=list(METHODS.values()), state="readonly", justify="right", font=("Tahoma", 9))
-                reverse = {v: k for k, v in METHODS.items()}
                 variable.set(METHODS.get(str(defaults.get(key)), str(defaults.get(key))))
+                control.bind("<<ComboboxSelected>>", lambda _event: self._update_depreciation_fields())
+            elif kind == "input_mode":
+                mode_values = {"بالسنوات (years)": "years", "بالنسبة من القيمة القابلة للإهلاك (rate)": "rate"}
+                display_var = tk.StringVar(value=next((label for label, mode in mode_values.items() if mode == defaults.get(key)), "بالسنوات (years)"))
+                control = ttk.Combobox(cell, textvariable=display_var, values=list(mode_values), state="readonly", justify="right", font=("Tahoma", 9))
+                control.bind("<<ComboboxSelected>>", lambda _event, v=variable, d=display_var, mapping=mode_values: (v.set(mapping.get(d.get(), "years")), self._update_depreciation_fields()))
+                variable.set(str(defaults.get(key) or "years"))
             elif kind == "status":
                 control = ttk.Combobox(cell, textvariable=variable, values=list(STATUSES.values()), state="readonly", justify="right", font=("Tahoma", 9))
                 variable.set(STATUSES.get(str(defaults.get(key)), str(defaults.get(key))))
@@ -727,6 +738,10 @@ class AssetDialog(tk.Toplevel):
             else:
                 control = tk.Entry(cell, textvariable=variable, justify="right", font=("Tahoma", 10), relief="solid", bd=1, bg="#fbfcfe", fg=INK, insertbackground=INK)
             control.pack(fill="x", ipady=5)
+            if key == "annualDepreciationRate":
+                tk.Label(cell, text="تُطبق النسبة على (التكلفة الرأسمالية − القيمة التخريدية).", bg=WHITE, fg=MUTED, font=("Tahoma", 8), anchor="e").pack(fill="x", pady=(3, 0))
+            if key in ("depreciationInputMode", "usefulLifeYears", "annualDepreciationRate"):
+                self._depreciation_field_cells[key] = cell
             form.columnconfigure(0, weight=1)
             form.columnconfigure(1, weight=1)
         notes_cell = tk.Frame(form, bg=WHITE)
@@ -735,12 +750,32 @@ class AssetDialog(tk.Toplevel):
         self.notes = tk.Text(notes_cell, height=3, wrap="word", font=("Tahoma", 9), relief="solid", bd=1, bg="#fbfcfe")
         self.notes.pack(fill="x")
         self.notes.insert("1.0", str(defaults.get("notes", "")))
+        self._update_depreciation_fields()
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill="x", padx=18, pady=(0, 16))
         tk.Label(footer, text="* الحقول الإلزامية   •   التواريخ بصيغة YYYY-MM-DD", bg=BG, fg=MUTED, font=("Tahoma", 9)).pack(side="right", pady=10)
         parent._button(footer, "حفظ التعديلات" if asset else "حفظ الأصل", self.submit, kind="primary").pack(side="left", padx=6)
         parent._button(footer, "إلغاء", self.destroy).pack(side="left", padx=6)
         self.bind("<Escape>", lambda _e: self.destroy())
+
+    def _update_depreciation_fields(self) -> None:
+        if not hasattr(self, "_depreciation_field_cells"):
+            return
+        method = str(self.vars.get("depreciationMethod", tk.StringVar()).get())
+        mode = str(self.vars.get("depreciationInputMode", tk.StringVar()).get() or "years")
+        is_straight = method == METHODS["straight_line"]
+        visibility = {
+            "depreciationInputMode": is_straight,
+            "usefulLifeYears": not is_straight or mode == "years",
+            "annualDepreciationRate": is_straight and mode == "rate",
+        }
+        for key, visible in visibility.items():
+            widget = self._depreciation_field_cells.get(key)
+            if widget:
+                if visible:
+                    widget.grid()
+                else:
+                    widget.grid_remove()
 
     def submit(self) -> None:
         try:
@@ -750,9 +785,26 @@ class AssetDialog(tk.Toplevel):
             purchase_cost = money(v["purchaseCost"].replace(",", ""))
             if not v["name"] or not v["code"] or purchase_cost <= 0:
                 raise ValueError("رمز الأصل والاسم وتكلفة شراء موجبة مطلوبة.")
-            if money(v["usefulLifeYears"]) < 1:
-                raise ValueError("يجب أن يكون العمر الإنتاجي سنة واحدة على الأقل.")
             method_key = next((k for k, label in METHODS.items() if label == v["depreciationMethod"]), "straight_line")
+            input_mode = v.get("depreciationInputMode", "years") or "years"
+            life_value: int | float | None = None
+            rate_value: float | None = None
+            if method_key == "straight_line" and input_mode == "rate":
+                try:
+                    rate_value = float(v.get("annualDepreciationRate", "").replace(",", ""))
+                except (TypeError, ValueError):
+                    raise ValueError("أدخل نسبة سنوية من القيمة القابلة للإهلاك بين 0.1 و100 بالمئة.")
+                if not math.isfinite(rate_value) or not 0.1 <= rate_value <= 100:
+                    raise ValueError("يجب أن تكون النسبة السنوية من القيمة القابلة للإهلاك بين 0.1 و100 بالمئة.")
+                life_value = 100.0 / rate_value
+            else:
+                try:
+                    life_raw = float(v["usefulLifeYears"].replace(",", ""))
+                except (TypeError, ValueError):
+                    raise ValueError("أدخل عمرًا إنتاجيًا صحيحًا لا يقل عن سنة.")
+                if not math.isfinite(life_raw) or life_raw < 1 or not life_raw.is_integer():
+                    raise ValueError("يجب أن يكون العمر الإنتاجي عددًا صحيحًا لا يقل عن سنة.")
+                life_value = int(life_raw)
             status_key = next((k for k, label in STATUSES.items() if label == v["status"]), "active")
             rule_map = {"منتصف الشهر (١–١٥)": "mid_month_15", "الشهر التالي": "next_month", "الشهر نفسه": "same_month"}
             result = dict(self.original or {})
@@ -760,13 +812,27 @@ class AssetDialog(tk.Toplevel):
                 "id": (self.original or {}).get("id", __import__("uuid").uuid4().hex), "code": v["code"], "accountCode": v["accountCode"], "name": v["name"], "category": v["category"],
                 "purchaseDate": v["purchaseDate"], "inServiceDate": v["inServiceDate"], "purchaseCost": purchase_cost,
                 "additionalCosts": money(v["additionalCosts"].replace(",", "")), "salvageValue": money(v["salvageValue"].replace(",", "")),
-                "usefulLifeYears": int(money(v["usefulLifeYears"])), "depreciationMethod": method_key,
+                "usefulLifeYears": life_value, "depreciationMethod": method_key,
                 "startDepreciationRule": rule_map.get(v["startDepreciationRule"], "mid_month_15"), "status": status_key,
                 "department": v["department"], "location": v["location"], "custodian": v["custodian"], "supplier": v["supplier"],
                 "invoiceNumber": v["invoiceNumber"], "serialNumber": v["serialNumber"], "totalEstimatedUnits": money(v["totalEstimatedUnits"]),
                 "producedUnitsToDate": money(v["producedUnitsToDate"]), "notes": self.notes.get("1.0", "end").strip(),
                 "createdAt": (self.original or {}).get("createdAt", datetime.now().isoformat(timespec="seconds")),
             })
+            if method_key == "straight_line":
+                result["depreciationInputMode"] = input_mode
+                if rate_value is not None:
+                    result["annualDepreciationRate"] = rate_value
+                else:
+                    # Retain the draft/previous rate when switching back to years mode.
+                    prior_rate = v.get("annualDepreciationRate", "").replace(",", "")
+                    if prior_rate:
+                        try:
+                            candidate_rate = float(prior_rate)
+                            if math.isfinite(candidate_rate) and 0.1 <= candidate_rate <= 100:
+                                result["annualDepreciationRate"] = candidate_rate
+                        except ValueError:
+                            pass
             self.on_save(result)
             self.destroy()
         except Exception as exc:

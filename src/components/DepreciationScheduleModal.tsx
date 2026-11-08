@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, FileSpreadsheet, Printer, Calendar, Clock, DollarSign, TrendingDown, Layers, CheckCircle, Building } from 'lucide-react';
 import { Asset, DepreciationScheduleRow } from '../types/asset';
-import { calculateSchedule, getCurrentAssetValuation, getTotalCost } from '../utils/depreciation';
+import { calculateSchedule, getAssetDepreciationInputMode, getCurrentAssetValuation, getEquivalentUsefulLifeYears, getTotalCost } from '../utils/depreciation';
 import { exportScheduleToExcel } from '../utils/excel';
 import { formatCurrency, formatDate, formatNumber, formatPercent, getMethodLabel, getStartRuleLabel } from '../utils/formatters';
 
@@ -142,9 +142,14 @@ export const DepreciationScheduleModal: React.FC<DepreciationScheduleModalProps>
             </div>
 
             <div className="rounded-xl bg-slate-800/80 p-3 border border-slate-700">
-              <span className="text-slate-400">العمر الإنتاجي:</span>
+              <span className="text-slate-400">أساس الإهلاك:</span>
               <div className="text-sm font-bold text-slate-200 font-mono-numbers mt-1">
-                {asset.usefulLifeYears} سنوات
+                {asset.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(asset) === 'rate' ? (
+                  <>
+                    <div className="text-sky-400">{asset.annualDepreciationRate}% سنوياً من الأساس القابل للإهلاك</div>
+                    <div className="mt-1 text-[10px] text-slate-400">العمر المكافئ: {getEquivalentUsefulLifeYears(asset)} سنوات</div>
+                  </>
+                ) : `${getEquivalentUsefulLifeYears(asset)} سنوات`}
               </div>
             </div>
 

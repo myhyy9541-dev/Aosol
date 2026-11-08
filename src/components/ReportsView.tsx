@@ -60,7 +60,7 @@ import {
   ColumnGroup 
 } from '../utils/customReportConfig';
 import { Asset, AssetCategory } from '../types/asset';
-import { calculatePeriodDepreciation, getCurrentAssetValuation, getTotalCost } from '../utils/depreciation';
+import { calculatePeriodDepreciation, getAnnualDepreciationRatePercent, getCurrentAssetValuation, getDepreciationInputModeLabel, getEquivalentUsefulLifeYears, getTotalCost } from '../utils/depreciation';
 import { formatCurrency, formatDate, formatNumber, formatPercent, getMethodLabel, getStartRuleLabel } from '../utils/formatters';
 
 interface ReportsViewProps {
@@ -622,7 +622,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             { text: r.asset.department || 'الإدارة العامة', align: 'right' },
             { text: r.categoryName, align: 'right' },
             { text: r.asset.inServiceDate, align: 'center' },
-            { text: getMethodLabel(r.asset.depreciationMethod).ar, align: 'right' },
+            { text: `${getMethodLabel(r.asset.depreciationMethod).ar}${r.asset.depreciationMethod === 'straight_line' ? ` | الأساس: ${getDepreciationInputModeLabel(r.asset)} | المعدل: ${getAnnualDepreciationRatePercent(r.asset) ?? '—'}% | مكافئ العمر: ${getEquivalentUsefulLifeYears(r.asset)} سنة` : ''}`, align: 'right' },
             { text: `${formatNumber(r.totalCost)} ${currency}`, align: 'left' },
             { text: `${formatNumber(r.beginningBookValue)} ${currency}`, align: 'left' },
             { text: `${formatNumber(r.periodExpense)} ${currency}`, align: 'left', highlight: 'amber', isBold: true },
@@ -1930,6 +1930,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       {/* Method & 15-Day Rule */}
                       <td className="p-2.5 text-slate-400 print:text-gray-700 whitespace-nowrap">
                         <div className="font-medium text-slate-300 print:text-black">{getMethodLabel(r.asset.depreciationMethod).short}</div>
+                        {r.asset.depreciationMethod === 'straight_line' && (
+                          <div className="mt-0.5 text-[10px] text-sky-300 print:text-gray-700">
+                            {getDepreciationInputModeLabel(r.asset)} · {getAnnualDepreciationRatePercent(r.asset) ?? '—'}% سنوياً · مكافئ العمر {getEquivalentUsefulLifeYears(r.asset)} سنة
+                          </div>
+                        )}
                         <div className="mt-0.5">
                           {r.asset.startDepreciationRule === 'mid_month_15' ? (
                             <span 

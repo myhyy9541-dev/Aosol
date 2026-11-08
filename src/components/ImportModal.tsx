@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { X, Upload, FileSpreadsheet, Download, AlertCircle, CheckCircle, ArrowRight, Layers } from 'lucide-react';
 import { Asset, AssetCategory } from '../types/asset';
 import { downloadExcelTemplate, parseExcelImport } from '../utils/excel';
+import { getAssetDepreciationInputMode, getEquivalentUsefulLifeYears } from '../utils/depreciation';
 import { formatNumber } from '../utils/formatters';
 
 interface ImportModalProps {
@@ -225,7 +226,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                       <th className="px-3 py-2">الكود</th>
                       <th className="px-3 py-2">اسم الأصل</th>
                       <th className="px-3 py-2">التكلفة</th>
-                      <th className="px-3 py-2">العمر</th>
+                      <th className="px-3 py-2">أساس الإهلاك</th>
                       <th className="px-3 py-2">طريقة الإهلاك</th>
                       <th className="px-3 py-2">القسم / الموقع</th>
                     </tr>
@@ -236,7 +237,11 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                         <td className="px-3 py-2 font-mono-numbers text-sky-400">{a.code}</td>
                         <td className="px-3 py-2 text-slate-200">{a.name}</td>
                         <td className="px-3 py-2 font-mono-numbers text-white">{formatNumber(a.purchaseCost)}</td>
-                        <td className="px-3 py-2 font-mono-numbers text-slate-300">{a.usefulLifeYears} س</td>
+                        <td className="px-3 py-2 font-mono-numbers text-slate-300">
+                          {a.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(a) === 'rate'
+                            ? `${a.annualDepreciationRate}% سنوياً (مكافئ ${getEquivalentUsefulLifeYears(a)} س)`
+                            : `${getEquivalentUsefulLifeYears(a)} سنوات`}
+                        </td>
                         <td className="px-3 py-2 text-slate-400">{a.depreciationMethod}</td>
                         <td className="px-3 py-2 text-slate-400">{a.department || a.location || '-'}</td>
                       </tr>

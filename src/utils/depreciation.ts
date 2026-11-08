@@ -7,6 +7,35 @@ export function getTotalCost(asset: Asset): number {
   return (Number(asset.purchaseCost) || 0) + (Number(asset.additionalCosts) || 0);
 }
 
+export function getAssetDepreciationInputMode(asset: Asset): 'years' | 'rate' {
+  return asset.depreciationInputMode === 'rate' ? 'rate' : 'years';
+}
+
+export function isValidAnnualDepreciationRate(rate: unknown): rate is number {
+  return typeof rate === 'number' && Number.isFinite(rate) && rate >= 0.1 && rate <= 100;
+}
+
+export function getEquivalentUsefulLifeYears(asset: Asset): number {
+  if (asset.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(asset) === 'rate' && isValidAnnualDepreciationRate(asset.annualDepreciationRate)) {
+    return 100 / asset.annualDepreciationRate;
+  }
+  return Number(asset.usefulLifeYears) || 0;
+}
+
+export function getAnnualDepreciationRatePercent(asset: Asset): number | undefined {
+  if (asset.depreciationMethod !== 'straight_line') return undefined;
+  if (getAssetDepreciationInputMode(asset) === 'rate') {
+    return isValidAnnualDepreciationRate(asset.annualDepreciationRate) ? asset.annualDepreciationRate : undefined;
+  }
+  const years = Number(asset.usefulLifeYears);
+  return Number.isFinite(years) && years > 0 ? 100 / years : undefined;
+}
+
+export function getDepreciationInputModeLabel(asset: Asset): string {
+  if (asset.depreciationMethod !== 'straight_line') return '—';
+  return getAssetDepreciationInputMode(asset) === 'rate' ? 'نسبة سنوية من القيمة القابلة للإهلاك' : 'عمر بالسنوات';
+}
+
 /**
  * Returns the effective date when depreciation expense starts based on the 15-day mid-month rule or chosen convention
  */
@@ -40,9 +69,24 @@ export function getEffectiveDepreciationStartDate(asset: Asset): Date {
  */
 export function calculateSchedule(asset: Asset): DepreciationScheduleRow[] {
   const totalCost = getTotalCost(asset);
-  const salvageValue = Math.min(Number(asset.salvageValue) || 0, totalCost);
+  const rateMode = asset.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(asset) === 'rate';
+  const salvageValue = rateMode
+    ? Math.min(Math.max(0, Number(asset.salvageValue) || 0), totalCost)
+    : Math.min(Number(asset.salvageValue) || 0, totalCost);
   const depreciableBase = Math.max(0, totalCost - salvageValue);
   const lifeYears = Math.max(1, Number(asset.usefulLifeYears) || 1);
+
+  if (rateMode && !isValidAnnualDepreciationRate(asset.annualDepreciationRate)) {
+    return [{
+      year: 1,
+      periodLabel: 'السنة 1',
+      beginningBookValue: totalCost,
+      depreciationExpense: 0,
+      accumulatedDepreciation: 0,
+      endingBookValue: totalCost,
+      ratePercent: 0,
+    }];
+  }
 
   if (depreciableBase <= 0) {
     return [
@@ -73,9 +117,14 @@ export function calculateSchedule(asset: Asset): DepreciationScheduleRow[] {
 
   switch (asset.depreciationMethod) {
     case 'straight_line': {
-      const annualExpense = depreciableBase / lifeYears;
+      const rateFraction = rateMode ? (asset.annualDepreciationRate as number) / 100 : 1 / lifeYears;
+      const annualExpense = rateMode ? depreciableBase * rateFraction : depreciableBase / lifeYears;
       let remainingDepreciable = depreciableBase;
-      const totalPeriods = firstYearRatio < 1 ? lifeYears + 1 : lifeYears;
+      const totalPeriods = rateMode
+        ? firstYearRatio < 1
+          ? 1 + Math.ceil(1 / rateFraction - firstYearRatio)
+          : Math.ceil(1 / rateFraction)
+        : firstYearRatio < 1 ? lifeYears + 1 : lifeYears;
 
       for (let i = 1; i <= totalPeriods; i++) {
         const periodYear = startYear + (i - 1);
@@ -105,7 +154,7 @@ export function calculateSchedule(asset: Asset): DepreciationScheduleRow[] {
           depreciationExpense: expense,
           accumulatedDepreciation: totalAccumulated,
           endingBookValue: currentBookValue,
-          ratePercent: (1 / lifeYears) * 100,
+          ratePercent: rateMode ? rateFraction * 100 : (1 / lifeYears) * 100,
         });
 
         if (remainingDepreciable <= 0.001) break;
@@ -233,7 +282,10 @@ export function calculateSchedule(asset: Asset): DepreciationScheduleRow[] {
  */
 export function getCurrentAssetValuation(asset: Asset, asOfDate: Date = new Date()) {
   const totalCost = getTotalCost(asset);
-  const salvageValue = Math.min(Number(asset.salvageValue) || 0, totalCost);
+  const rateMode = asset.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(asset) === 'rate';
+  const salvageValue = rateMode
+    ? Math.min(Math.max(0, Number(asset.salvageValue) || 0), totalCost)
+    : Math.min(Number(asset.salvageValue) || 0, totalCost);
   const depreciableBase = Math.max(0, totalCost - salvageValue);
 
   // Apply the disposal snapshot only on/after its effective date. Historical
@@ -381,7 +433,7 @@ export interface PeriodDepreciationResult {
   accumulatedAtEnd: number;
   endingBookValue: number;
   statusInPeriod: 'active' | 'acquired_in_period' | 'disposed_in_period' | 'disposed_before_period' | 'fully_depreciated' | 'not_yet_in_service';
-  depreciationRatePercent: number;
+  depreciationRatePercent?: number;
 }
 
 /**
@@ -395,7 +447,10 @@ export function calculatePeriodDepreciation(
   const fromDate = new Date(fromDateStr);
   const toDate = new Date(toDateStr);
   const totalCost = getTotalCost(asset);
-  const salvageValue = Math.min(Number(asset.salvageValue) || 0, totalCost);
+  const rateMode = asset.depreciationMethod === 'straight_line' && getAssetDepreciationInputMode(asset) === 'rate';
+  const salvageValue = rateMode
+    ? Math.min(Math.max(0, Number(asset.salvageValue) || 0), totalCost)
+    : Math.min(Number(asset.salvageValue) || 0, totalCost);
   const inService = asset.inServiceDate ? new Date(asset.inServiceDate) : new Date(asset.purchaseDate || new Date());
 
   // If asset in-service is after the target period
@@ -486,7 +541,11 @@ export function calculatePeriodDepreciation(
     statusInPeriod = 'fully_depreciated';
   }
 
-  const annualRate = (1 / Math.max(1, asset.usefulLifeYears)) * 100;
+  const annualRate = asset.depreciationMethod !== 'straight_line'
+    ? undefined
+    : rateMode
+      ? (isValidAnnualDepreciationRate(asset.annualDepreciationRate) ? asset.annualDepreciationRate : 0)
+      : (1 / Math.max(1, asset.usefulLifeYears)) * 100;
 
   return {
     assetId: asset.id,

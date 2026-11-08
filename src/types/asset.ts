@@ -69,6 +69,8 @@ export interface Asset {
   salvageValue: number;       // قيمة النفاية / الخردة المقدرة
   usefulLifeYears: number;    // العمر الإنتاجي بالسنوات
   usefulLifeMonths?: number;  // أو بالشهور
+  depreciationInputMode?: 'years' | 'rate';
+  annualDepreciationRate?: number; // Annual percentage (e.g. 20 means 20%)
   depreciationMethod: DepreciationMethod;
   startDepreciationRule: DepreciationStartRule; // قاعدة بدء الإهلاك (يوم 1-15 أو 16-نهاية الشهر)
   status: AssetStatus;

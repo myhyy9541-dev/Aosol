@@ -1,6 +1,6 @@
-import * as XLSX from 'xlsx-js-style';
+import XLSX from 'xlsx-js-style';
 import { Asset, AssetCategory, DepreciationScheduleRow } from '../types/asset';
-import { calculatePeriodDepreciation, calculateSchedule, getCurrentAssetValuation, getTotalCost } from './depreciation';
+import { calculatePeriodDepreciation, calculateSchedule, getAnnualDepreciationRatePercent, getCurrentAssetValuation, getDepreciationInputModeLabel, getEquivalentUsefulLifeYears, getTotalCost } from './depreciation';
 import { formatNumber, getMethodLabel, getStartRuleLabel } from './formatters';
 
 // Common Palette for Excel Exports (Accounting & Financial Elegance)
@@ -155,11 +155,13 @@ export function exportAssetsToExcel(
     'تكاليف إضافية',
     'إجمالي التكلفة الرأسمالية',
     'قيمة الخردة / النفاية',
-    'العمر الإنتاجي (سنوات)',
+    'العمر الإنتاجي / مكافئ النسبة (سنوات)',
+    'أساس إدخال القسط الثابت',
+    'معدل الإهلاك السنوي من القيمة القابلة للإهلاك %',
     'طريقة الإهلاك',
     'مجمع الإهلاك الحالي',
     'صافي القيمة الدفترية',
-    'نسبة الإهلاك %',
+    'نسبة الإهلاك المتراكمة %',
     'حالة الأصل',
     'الموقع / الفرع',
     'المسؤول / العهدة',
@@ -245,7 +247,9 @@ export function exportAssetsToExcel(
       { val: Number(asset.additionalCosts) || 0, align: 'left', format: '#,##0.00' },
       { val: totalCost, align: 'left', format: '#,##0.00' },
       { val: Number(asset.salvageValue) || 0, align: 'left', format: '#,##0.00' },
-      { val: Number(asset.usefulLifeYears) || 0, align: 'center' },
+      { val: getEquivalentUsefulLifeYears(asset), align: 'center' },
+      { val: getDepreciationInputModeLabel(asset), align: 'center' },
+      { val: getAnnualDepreciationRatePercent(asset) === undefined ? '-' : `${getAnnualDepreciationRatePercent(asset)}%`, align: 'center' },
       { val: methodInfo.short, align: 'center' },
       { val: Math.round(valuation.accumulatedDepreciation * 100) / 100, align: 'left', format: '#,##0.00', customBg: COLORS.AMBER_BG, customColor: COLORS.AMBER_TEXT },
       { val: Math.round(valuation.netBookValue * 100) / 100, align: 'left', format: '#,##0.00', customBg: COLORS.EMERALD_BG, customColor: COLORS.EMERALD_TEXT },
@@ -283,8 +287,8 @@ export function exportAssetsToExcel(
     { c: 8, val: sumExtra, format: '#,##0.00' },
     { c: 9, val: sumTotalCost, format: '#,##0.00' },
     { c: 10, val: sumSalvage, format: '#,##0.00' },
-    { c: 13, val: Math.round(sumAccum * 100) / 100, format: '#,##0.00' },
-    { c: 14, val: Math.round(sumNBV * 100) / 100, format: '#,##0.00' },
+    { c: 15, val: Math.round(sumAccum * 100) / 100, format: '#,##0.00' },
+    { c: 16, val: Math.round(sumNBV * 100) / 100, format: '#,##0.00' },
   ];
 
   for (let c = 0; c < totalCols; c++) {
@@ -338,7 +342,9 @@ export function exportAssetsToExcel(
       a.additionalCosts,
       getTotalCost(a),
       a.salvageValue,
-      a.usefulLifeYears,
+      getEquivalentUsefulLifeYears(a),
+      getDepreciationInputModeLabel(a),
+      getAnnualDepreciationRatePercent(a) === undefined ? '-' : `${getAnnualDepreciationRatePercent(a)}%`,
       getMethodLabel(a.depreciationMethod).short,
       val.accumulatedDepreciation,
       val.netBookValue,
@@ -361,8 +367,8 @@ export function exportAssetsToExcel(
     8: 16,
     9: 20,
     10: 16,
-    13: 20,
-    14: 20,
+    15: 20,
+    16: 20,
   });
 
   // Row heights
@@ -459,7 +465,11 @@ export function exportPeriodReportToExcel(
     const isZebra = idx % 2 === 1;
     const rowBg = isZebra ? COLORS.ZEBRA_BG : COLORS.WHITE;
     const ruleLabel = r.asset.startDepreciationRule === 'mid_month_15' ? 'قاعدة 15 يوم' : r.asset.startDepreciationRule;
-    const methodShort = `${getMethodLabel(r.asset.depreciationMethod).short} (${ruleLabel})`;
+    const annualRate = getAnnualDepreciationRatePercent(r.asset);
+    const inputDisclosure = r.asset.depreciationMethod === 'straight_line'
+      ? ` | الأساس: ${getDepreciationInputModeLabel(r.asset)} | المعدل: ${annualRate === undefined ? '—' : `${annualRate}%`} | مكافئ العمر: ${getEquivalentUsefulLifeYears(r.asset)} سنة`
+      : '';
+    const methodShort = `${getMethodLabel(r.asset.depreciationMethod).short} (${ruleLabel})${inputDisclosure}`;
 
     const cells: { val: any; align?: string; format?: string; customBg?: string; customColor?: string }[] = [
       { val: r.assetCode, align: 'center' },
@@ -1134,7 +1144,11 @@ export function exportScheduleToExcel(asset: Asset, currency: string = 'ريال
 
   // Subtitle
   const ruleInfo = getStartRuleLabel(asset.startDepreciationRule);
-  const meta = `طريقة الإهلاك: ${getMethodLabel(asset.depreciationMethod).ar} | سياسة البدء: ${ruleInfo.label} | التكلفة: ${formatNumber(totalCost)} ${currency} | الخردة: ${formatNumber(asset.salvageValue)} ${currency}`;
+  const annualRate = getAnnualDepreciationRatePercent(asset);
+  const inputDisclosure = asset.depreciationMethod === 'straight_line'
+    ? ` | أساس الإدخال: ${getDepreciationInputModeLabel(asset)} | المعدل السنوي: ${annualRate === undefined ? '—' : `${annualRate}%`} | مكافئ العمر: ${getEquivalentUsefulLifeYears(asset)} سنة`
+    : '';
+  const meta = `طريقة الإهلاك: ${getMethodLabel(asset.depreciationMethod).ar}${inputDisclosure} | سياسة البدء: ${ruleInfo.label} | التكلفة: ${formatNumber(totalCost)} ${currency} | الخردة: ${formatNumber(asset.salvageValue)} ${currency}`;
   for (let c = 0; c < headers.length; c++) {
     const ref = XLSX.utils.encode_cell({ r: currentRow, c });
     formatCell(wsSchedule, ref, c === 0 ? meta : '', {
@@ -1504,6 +1518,8 @@ export function downloadExcelTemplate(mode: 'blank' | 'with_sample' = 'with_samp
     'الوحدات المنتجة حتى الآن',
     'وحدة القياس',
     'ملاحظات',
+    'أساس إدخال القسط الثابت (years أو rate)',
+    'معدل الإهلاك السنوي من القيمة القابلة للإهلاك % (0.1 إلى 100)',
   ];
 
   const totalCols = headers.length;
@@ -1522,7 +1538,7 @@ export function downloadExcelTemplate(mode: 'blank' | 'with_sample' = 'with_samp
   currentRow++;
 
   // Subtitle with essential guidelines
-  const instructions = 'تعليمات التعبئة: يرجى إدخال التكاليف كأرقام مجردة بالإنجليزية | التواريخ بصيغة YYYY-MM-DD | راجع تبويب (دليل الخيارات المعتمدة) بالأسفل للتعرف على التصنيفات وطرق الإهلاك';
+  const instructions = 'تعليمات التعبئة: أدخل التكاليف كأرقام | التواريخ بصيغة YYYY-MM-DD | للقسط الثابت اختر years أو rate؛ تُحسب النسبة من (التكلفة الرأسمالية شامل التكاليف الإضافية − القيمة التخريدية) | الملفات القديمة التي لا تحتوي أعمدة النمط والمعدل تُفسر على أنها years | النسبة 0.1–100%';
   for (let c = 0; c < totalCols; c++) {
     const ref = XLSX.utils.encode_cell({ r: currentRow, c });
     formatCell(ws, ref, c === 0 ? instructions : '', {
@@ -1652,7 +1668,7 @@ export function downloadExcelTemplate(mode: 'blank' | 'with_sample' = 'with_samp
     const isZebra = idx % 2 === 1;
     const rowBg = isZebra ? COLORS.ZEBRA_BG : COLORS.WHITE;
 
-    rowValues.forEach((val, c) => {
+    [...rowValues, 'years', ''].forEach((val, c) => {
       const ref = XLSX.utils.encode_cell({ r: currentRow, c });
       const isNumber = typeof val === 'number';
       formatCell(ws, ref, val, {
@@ -1700,6 +1716,8 @@ export function downloadExcelTemplate(mode: 'blank' | 'with_sample' = 'with_samp
     { wch: 18 }, // وحدات منتجة
     { wch: 14 }, // وحدة قياس
     { wch: 36 }, // ملاحظات
+    { wch: 30 }, // أساس إدخال القسط الثابت
+    { wch: 24 }, // المعدل السنوي
   ];
 
   ws['!rows'] = [
@@ -2040,6 +2058,31 @@ export async function parseExcelImport(file: File, categories: AssetCategory[]):
             method = 'units_of_production';
           }
 
+          const inputModeRaw = getRowVal(row, [
+            'أساس إدخال القسط الثابت', 'أساس إدخال الإهلاك', 'أساس الإدخال', 'نمط إدخال الإهلاك', 'أساس الإهلاك', 'Depreciation Input Mode', 'Input Mode', 'Basis Mode',
+          ]).trim().toLowerCase();
+          let depreciationInputMode: Asset['depreciationInputMode'];
+          if (inputModeRaw) {
+            if (inputModeRaw === 'rate' || inputModeRaw.includes('نسبة') || inputModeRaw.includes('معدل') || inputModeRaw.includes('percent')) {
+              depreciationInputMode = 'rate';
+            } else if (inputModeRaw === 'years' || inputModeRaw === 'year' || inputModeRaw.includes('سنوات') || inputModeRaw.includes('العمر') || inputModeRaw.includes('years')) {
+              depreciationInputMode = 'years';
+            } else {
+              errors.push(`الصف ${rowNum}: أساس إدخال الإهلاك غير معروف (${inputModeRaw}).`);
+              return;
+            }
+          }
+
+          const annualRateRaw = getRowVal(row, [
+            'المعدل السنوي من القيمة القابلة للإهلاك', 'المعدل السنوي', 'معدل الإهلاك السنوي', 'نسبة الإهلاك السنوية', 'معدل الإهلاك', 'Annual Depreciation Rate', 'Depreciation Rate', 'Rate %',
+          ]);
+          const parsedAnnualRate = cleanNum(annualRateRaw);
+          if (method === 'straight_line' && depreciationInputMode === 'rate' &&
+              (!annualRateRaw || !Number.isFinite(parsedAnnualRate) || parsedAnnualRate < 0.1 || parsedAnnualRate > 100)) {
+            errors.push(`الصف ${rowNum}: نسبة الإهلاك السنوية من القيمة القابلة للإهلاك مطلوبة ويجب أن تكون رقماً من 0.1 إلى 100.`);
+            return;
+          }
+
           // 15-Day Mid-Month Start Rule
           const ruleInput = getRowVal(row, ['سياسة بدء الإهلاك', 'قاعدة 15 يوم', 'قاعدة منتصف الشهر', 'Start Rule', 'Rule']).toLowerCase();
           let startDepreciationRule: Asset['startDepreciationRule'] = 'mid_month_15'; // Default to user's 15-day rule
@@ -2072,7 +2115,9 @@ export async function parseExcelImport(file: File, categories: AssetCategory[]):
             purchaseCost,
             additionalCosts,
             salvageValue,
-            usefulLifeYears,
+            usefulLifeYears: method === 'straight_line' && depreciationInputMode === 'rate' ? 100 / parsedAnnualRate : usefulLifeYears,
+            ...(depreciationInputMode ? { depreciationInputMode } : {}),
+            ...(method === 'straight_line' && depreciationInputMode === 'rate' ? { annualDepreciationRate: parsedAnnualRate } : {}),
             depreciationMethod: method,
             startDepreciationRule,
             status: 'active',

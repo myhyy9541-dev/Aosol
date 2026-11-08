@@ -1,4 +1,5 @@
 import { Asset } from '../types/asset';
+import { getAnnualDepreciationRatePercent, getDepreciationInputModeLabel, getEquivalentUsefulLifeYears } from './depreciation';
 import { formatDate, formatNumber, formatPercent, getMethodLabel } from './formatters';
 
 export type ColumnGroup = 'basic' | 'dates_policies' | 'financial' | 'operations';
@@ -125,23 +126,39 @@ export const ALL_CUSTOM_REPORT_COLUMNS: CustomReportColumnDef[] = [
   },
   {
     id: 'usefulLife',
-    label: 'العمر الإنتاجي (سنوات)',
+    label: 'العمر الإنتاجي / مكافئ النسبة (سنوات)',
     group: 'dates_policies',
     align: 'center',
     width: 16,
     isNumeric: true,
     defaultSelected: false,
-    getValue: (asset) => ({ display: `${asset.usefulLifeYears} سنوات`, raw: asset.usefulLifeYears }),
+    getValue: (asset) => {
+      const years = getEquivalentUsefulLifeYears(asset);
+      return { display: `${years} سنوات`, raw: years };
+    },
+  },
+  {
+    id: 'depreciationInputMode',
+    label: 'أساس إدخال القسط الثابت',
+    group: 'dates_policies',
+    align: 'center',
+    width: 20,
+    defaultSelected: false,
+    getValue: (asset) => {
+      const mode = getDepreciationInputModeLabel(asset);
+      return { display: mode, raw: mode };
+    },
   },
   {
     id: 'depreciationRate',
-    label: 'نسبة الإهلاك السنوية %',
+    label: 'نسبة الإهلاك السنوية من القيمة القابلة للإهلاك %',
     group: 'dates_policies',
     align: 'center',
     width: 16,
     defaultSelected: false,
     getValue: (asset) => {
-      const rate = asset.usefulLifeYears > 0 ? 100 / asset.usefulLifeYears : 0;
+      const rate = getAnnualDepreciationRatePercent(asset);
+      if (rate === undefined) return { display: '—', raw: 0 };
       const r = formatPercent(rate);
       return { display: r, raw: rate };
     },
